@@ -108,7 +108,6 @@ def generate_guac_url(target_ip, student_id):
 
 def get_vm_ip(vmid):
     """Polls the guest-agent until a VALID, routable IPv4 address is found."""
-    print(f"[{vmid}] Waiting for qemu-guest-agent to report a valid LAN IP...")
     while True:
         try:
             interfaces = proxmox.nodes(proxmox_node).qemu(vmid).agent.get("network-get-interfaces")

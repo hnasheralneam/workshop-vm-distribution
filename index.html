@@ -89,24 +89,46 @@
 
 		<script>
 			// 1. Check for existing session on page load
-			const existingUrl = localStorage.getItem("assigned_vm_url");
+			let existingUrl = localStorage.getItem("assigned_vm_url");
 			const btn = document.getElementById("claim-btn");
 			const status = document.getElementById("status-message");
 
 			if (existingUrl) {
 				btn.innerText = "Reconnect";
 				status.innerText = "You already have an assigned machine.";
+				btn.disabled = true;
+				checkExistingVm();
+			}
+
+			// 2. Confirm the stored VM is still claimed for us before trusting it;
+			// it may have been deleted/recreated by the instructor in the meantime.
+			async function checkExistingVm() {
+				try {
+					const response = await fetch(`/api/validate?url=${encodeURIComponent(existingUrl)}`);
+					const data = await response.json();
+
+					if (!data.valid) {
+						localStorage.removeItem("assigned_vm_url");
+						existingUrl = null;
+						btn.innerText = "Claim";
+						status.innerText = "Your previous machine is no longer available. Claim a new one below.";
+					}
+				} catch (error) {
+					status.innerText = "Network error checking your machine. Please try again.";
+				} finally {
+					btn.disabled = false;
+				}
 			}
 
 			async function handleTerminalAccess() {
-				// 2. If they already have a VM, just redirect them back to it
+				// 3. If they already have a VM, just redirect them back to it
 				if (existingUrl) {
 					status.innerText = "Redirecting...";
 					window.location.href = existingUrl;
 					return;
 				}
 
-				// 3. Otherwise, pull a new VM from the backend queue
+				// 4. Otherwise, pull a new VM from the backend queue
 				btn.disabled = true;
 				status.innerText = "Assigning your machine...";
 

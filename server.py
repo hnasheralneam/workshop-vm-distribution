@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 BASE_DIR = Path(__file__).parent
 POOL_FILE = BASE_DIR / "pool.json"
@@ -84,6 +84,14 @@ def claim():
         entry["claimed"] = True
         save_pool()
         return jsonify(url=entry["url"])
+
+
+@app.route("/api/validate")
+def validate():
+    url = request.args.get("url", "")
+    with lock:
+        still_claimed = any(entry["url"] == url and entry["claimed"] for entry in pool)
+    return jsonify(valid=still_claimed)
 
 
 if __name__ == "__main__":
