@@ -108,10 +108,19 @@
 					const data = await response.json();
 
 					if (!data.valid) {
-						localStorage.removeItem("assigned_vm_url");
-						existingUrl = null;
-						btn.innerText = "Claim";
-						status.innerText = "Your previous machine is no longer available. Claim a new one below.";
+						if (data.url) {
+							localStorage.setItem("assigned_vm_url", data.url);
+							existingUrl = data.url;
+							btn.innerText = "Reconnect";
+							status.innerText = "Your previous machine expired. A new machine has been assigned.";
+						} else {
+							localStorage.removeItem("assigned_vm_url");
+							existingUrl = null;
+							btn.innerText = "Claim";
+							status.innerText = data.expired
+								? "Your previous machine expired and no new machines are available. Please contact your instructor."
+								: "Your previous machine is no longer available. Claim a new one below.";
+						}
 					}
 				} catch (error) {
 					status.innerText = "Network error checking your machine. Please try again.";

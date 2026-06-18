@@ -43,6 +43,7 @@ vm_password = os.getenv("TEMPLATE_VM_PASSWORD")
 
 guacamole_url = os.getenv("GUACAMOLE_URL")
 guacamole_key = os.getenv("GUACAMOLE_KEY")
+guac_link_ttl_seconds = int(os.getenv("GUAC_LINK_TTL_SECONDS", 7200))
 
 pool_output_file = os.getenv("URL_OUTPUT_FILE")
 vm_count = int(os.getenv("VM_COUNT", 5))
@@ -63,10 +64,11 @@ if proxmox_scheme == "http":
 def generate_guac_url(target_ip, student_id):
     """Encrypts the payload and fetches the Guacamole token URL."""
     secret_key = bytes.fromhex(guacamole_key)
+    expires_at = time.time() + guac_link_ttl_seconds
 
     payload = {
         "username": student_id,
-       "expires": int((time.time() + 7200) * 1000), # 2 hours
+        "expires": int(expires_at * 1000),
         "connections": {
             f"Workshop VM - {student_id}": {
                 "id": str(uuid.uuid4()),
@@ -102,8 +104,8 @@ def generate_guac_url(target_ip, student_id):
     )
 
     if response.status_code == 200:
-        return f"{guacamole_url}/?token={response.json().get('authToken')}"
-    return "Error generating Guacamole URL"
+        return f"{guacamole_url}/?token={response.json().get('authToken')}", expires_at
+    return "Error generating Guacamole URL", expires_at
 
 
 def get_vm_ip(vmid):
@@ -146,8 +148,8 @@ def provision_worker(vmid, student_id):
     print(f"[{vmid}] Waiting for SSH...")
     wait_for_ssh(vm_ip)
 
-    guac_url = generate_guac_url(vm_ip, student_id)
-    return student_id, guac_url
+    guac_url, expires_at = generate_guac_url(vm_ip, student_id)
+    return student_id, guac_url, expires_at
 
 def run_parallel_provisioning(count):
     # 1. Pre-allocate all VMIDs safely on the main thread, skipping any IDs already in use
@@ -180,8 +182,8 @@ def run_parallel_provisioning(count):
         # Gather results as they finish
         for future in concurrent.futures.as_completed(futures):
             try:
-                student_id, url = future.result()
-                results.append((student_id, url))
+                student_id, url, expires_at = future.result()
+                results.append((student_id, url, expires_at))
                 print(f"✅ {student_id} is ready!")
             except Exception as exc:
                 print(f"❌ VM creation failed: {exc}")
@@ -190,7 +192,7 @@ def run_parallel_provisioning(count):
     print("\n=== ALL WORKSHOP VMS PROVISIONED ===")
     # Sort them so student-1 is at the top
     results.sort(key=lambda x: int(x[0].split('-')[1]))
-    for student, url in results:
+    for student, url, _ in results:
         print(f"{student}) {url}")
 
     existing_pool = []
@@ -198,7 +200,7 @@ def run_parallel_provisioning(count):
         with open(pool_output_file) as f:
             existing_pool = json.load(f)
 
-    new_entries = [{"student_id": s, "url": u, "claimed": False} for s, u in results]
+    new_entries = [{"student_id": s, "url": u, "claimed": False, "expires_at": e} for s, u, e in results]
     full_pool = existing_pool + new_entries
 
     with open(pool_output_file, "w") as f:

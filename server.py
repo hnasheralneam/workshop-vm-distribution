@@ -90,8 +90,24 @@ def claim():
 def validate():
     url = request.args.get("url", "")
     with lock:
-        still_claimed = any(entry["url"] == url and entry["claimed"] for entry in pool)
-    return jsonify(valid=still_claimed)
+        entry = next((e for e in pool if e["url"] == url and e["claimed"]), None)
+        if entry is None:
+            return jsonify(valid=False)
+
+        if entry.get("expires_at") is not None and time.time() >= entry["expires_at"]:
+            entry["claimed"] = False
+
+            available = [e for e in pool if not e["claimed"]]
+            if not available:
+                save_pool()
+                return jsonify(valid=False, expired=True)
+
+            replacement = random.choice(available)
+            replacement["claimed"] = True
+            save_pool()
+            return jsonify(valid=False, expired=True, url=replacement["url"])
+
+        return jsonify(valid=True)
 
 
 if __name__ == "__main__":
