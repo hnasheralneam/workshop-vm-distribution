@@ -1,12 +1,14 @@
 import json
 import random
 import threading
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, send_from_directory
 
 BASE_DIR = Path(__file__).parent
 POOL_FILE = BASE_DIR / "pool.json"
+POOL_POLL_INTERVAL_SECONDS = 5
 
 app = Flask(__name__, static_folder=None)
 lock = threading.Lock()
@@ -20,11 +22,31 @@ def load_pool():
 
 
 pool = load_pool()
+pool_mtime = POOL_FILE.stat().st_mtime if POOL_FILE.exists() else None
 
 
 def save_pool():
+    global pool_mtime
     with open(POOL_FILE, "w") as f:
         json.dump(pool, f, indent=2)
+    pool_mtime = POOL_FILE.stat().st_mtime
+
+
+def watch_pool_file():
+    """Background thread: picks up VMs added/removed on disk by the provisioner/destroyer."""
+    global pool, pool_mtime
+    while True:
+        time.sleep(POOL_POLL_INTERVAL_SECONDS)
+        try:
+            mtime = POOL_FILE.stat().st_mtime if POOL_FILE.exists() else None
+        except OSError:
+            continue
+
+        if mtime != pool_mtime:
+            with lock:
+                pool = load_pool()
+                pool_mtime = mtime
+            print(f"Reloaded pool.json: now {len(pool)} VM(s)")
 
 
 @app.route("/")
@@ -66,4 +88,5 @@ def claim():
 
 if __name__ == "__main__":
     print(f"Loaded {len(pool)} VM(s) from {POOL_FILE}")
+    threading.Thread(target=watch_pool_file, daemon=True).start()
     app.run(host="0.0.0.0", port=5000)
