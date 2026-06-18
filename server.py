@@ -2,6 +2,7 @@ import json
 import random
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -32,6 +33,14 @@ def save_pool():
     pool_mtime = POOL_FILE.stat().st_mtime
 
 
+def is_expired(entry):
+    return entry.get("expires_at") is not None and time.time() >= entry["expires_at"]
+
+
+def is_available(entry):
+    return not entry["claimed"] and not is_expired(entry)
+
+
 def watch_pool_file():
     """Background thread: picks up VMs added/removed on disk by the provisioner/destroyer."""
     global pool, pool_mtime
@@ -56,17 +65,20 @@ def index():
 
 @app.route("/status")
 def status():
-    rows = "".join(
-        f"<tr><td>{entry['url']}</td><td>{'claimed' if entry['claimed'] else 'available'}</td></tr>"
-        for entry in pool
-    )
+    def row(entry):
+        status_label = "expired" if is_expired(entry) else ("claimed" if entry["claimed"] else "available")
+        expires_at = entry.get("expires_at")
+        expires_label = datetime.fromtimestamp(expires_at).strftime("%Y-%m-%d %H:%M:%S") if expires_at else "n/a"
+        return f"<tr><td>{entry['url']}</td><td>{status_label}</td><td>{expires_label}</td></tr>"
+
+    rows = "".join(row(entry) for entry in pool)
     return f"""<!DOCTYPE html>
 <html>
 <head><title>VM Status</title></head>
 <body>
 <h1>VM Status</h1>
 <table border="1" cellpadding="4">
-<tr><th>URL</th><th>Status</th></tr>
+<tr><th>URL</th><th>Status</th><th>Expires</th></tr>
 {rows}
 </table>
 </body>
@@ -76,7 +88,7 @@ def status():
 @app.route("/api/claim")
 def claim():
     with lock:
-        available = [entry for entry in pool if not entry["claimed"]]
+        available = [entry for entry in pool if is_available(entry)]
         if not available:
             return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
 
@@ -94,10 +106,10 @@ def validate():
         if entry is None:
             return jsonify(valid=False)
 
-        if entry.get("expires_at") is not None and time.time() >= entry["expires_at"]:
+        if is_expired(entry):
             entry["claimed"] = False
 
-            available = [e for e in pool if not e["claimed"]]
+            available = [e for e in pool if is_available(e)]
             if not available:
                 save_pool()
                 return jsonify(valid=False, expired=True)
