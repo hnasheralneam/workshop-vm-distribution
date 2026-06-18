@@ -1,4 +1,5 @@
 import time
+import json
 import concurrent.futures
 import os
 from dotenv import load_dotenv
@@ -8,6 +9,8 @@ from proxmoxer import ProxmoxAPI
 # CONFIGURATION
 # ==========================================
 load_dotenv()
+
+POOL_OUTPUT_FILE = os.getenv("URL_OUTPUT_FILE")
 
 PROXMOX_HOST = os.getenv("PROXMOX_URL")
 if PROXMOX_HOST.startswith("http://"):
@@ -85,6 +88,11 @@ def run_teardown():
     print("\n=== TEARDOWN COMPLETE ===")
     for result in results:
         print(result)
+
+    if POOL_OUTPUT_FILE:
+        with open(POOL_OUTPUT_FILE, "w") as f:
+            json.dump([], f, indent=2)
+        print(f"\nCleared pool file: {POOL_OUTPUT_FILE}")
 
 if __name__ == "__main__":
     # Add a safety prompt to prevent accidental execution

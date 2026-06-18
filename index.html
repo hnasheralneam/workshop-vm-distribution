@@ -43,17 +43,6 @@
 				font-size: 0.9rem;
 			}
 
-			#warning-banner {
-				background: #3a2412;
-				border: 1px solid #7a4a16;
-				color: #ffb866;
-				border-radius: 8px;
-				padding: 0.75rem 1rem;
-				font-size: 0.85rem;
-				text-align: left;
-				margin-bottom: 1.5rem;
-			}
-
 			#claim-btn {
 				width: 100%;
 				padding: 0.85rem 1rem;
@@ -91,17 +80,10 @@
 	</head>
 	<body>
 		<div class="portal-container">
-			<h2>CyberDawgs Terminal Access</h2>
+			<h2>DawgSec Workshop VMs</h2>
 			<p class="subtitle">Claim your personal workshop VM below.</p>
 
-			<div id="warning-banner">
-				⚠️ Once connected, do not refresh or reopen the terminal tab. Guacamole
-				treats a reload as a duplicate login attempt and may temporarily ban
-				repeat offenders. If you get disconnected, return here and click
-				"Reconnect to Terminal" instead.
-			</div>
-
-			<button id="claim-btn" onclick="handleTerminalAccess()">Claim My VM</button>
+			<button id="claim-btn" onclick="handleTerminalAccess()">Claim</button>
 			<p id="status-message"></p>
 		</div>
 
@@ -112,7 +94,7 @@
 			const status = document.getElementById("status-message");
 
 			if (existingUrl) {
-				btn.innerText = "Reconnect to Terminal";
+				btn.innerText = "Reconnect";
 				status.innerText = "You already have an assigned machine.";
 			}
 

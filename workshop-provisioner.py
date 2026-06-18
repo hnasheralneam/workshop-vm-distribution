@@ -151,13 +151,19 @@ def provision_worker(vmid, student_id):
     return student_id, guac_url
 
 def run_parallel_provisioning(count):
-    # 1. Pre-allocate all VMIDs safely on the main thread
+    # 1. Pre-allocate all VMIDs safely on the main thread, skipping any IDs already in use
     print(f"\n--- Pre-allocating {count} VMIDs ---")
+    used_vmids = {vm["vmid"] for vm in proxmox.nodes(proxmox_node).qemu.get()}
     tasks = []
-    current_vmid = proxmox.cluster.nextid.get()
+    candidate_vmid = int(proxmox.cluster.nextid.get())
 
     for i in range(count):
-        target_vmid = current_vmid + str(i)
+        while candidate_vmid in used_vmids:
+            candidate_vmid += 1
+        target_vmid = candidate_vmid
+        used_vmids.add(target_vmid)
+        candidate_vmid += 1
+
         student_id = f"student-{i+1}"
         tasks.append((target_vmid, student_id))
         print(f"Allocated {target_vmid} to {student_id}")
@@ -186,18 +192,22 @@ def run_parallel_provisioning(count):
     # Sort them so student-1 is at the top
     results.sort(key=lambda x: int(x[0].split('-')[1]))
     for student, url in results:
-        print(f"{student}:\n{url}\n")
+        print(f"{student}) {url}")
+
+    existing_pool = []
+    if os.path.exists(pool_output_file):
+        with open(pool_output_file) as f:
+            existing_pool = json.load(f)
+
+    new_entries = [{"student_id": s, "url": u, "claimed": False} for s, u in results]
+    full_pool = existing_pool + new_entries
 
     with open(pool_output_file, "w") as f:
-        json.dump(
-            [{"student_id": s, "url": u, "claimed": False} for s, u in results],
-            f,
-            indent=2,
-        )
-    print(f"\nPool written to {pool_output_file}")
+        json.dump(full_pool, f, indent=2)
+    print(f"\nAdded {len(new_entries)} VMs to pool (now {len(full_pool)} total)")
 
 def wait_for_ssh(ip):
-    """Attempts a TCP connection to port 22 until the SSH daemon answers."""
+    # Attempts a TCP connection to port 22 until the SSH daemon answers.
     while True:
         try:
             # Attempt to open a socket to port 22
@@ -211,4 +221,5 @@ def wait_for_ssh(ip):
 
 
 if __name__ == "__main__":
+    print(f"=== Creating {vm_count} workshop VMs ===")
     run_parallel_provisioning(vm_count)

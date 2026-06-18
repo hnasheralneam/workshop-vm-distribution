@@ -39,3 +39,7 @@ Edit `.env` with your Proxmox and Guacamole details:
    ```bash
    python workshop-destroyer.py
    ```
+
+## Notes
+
+View status of all vms at `http://0.0.0.0:5000/status`
