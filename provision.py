@@ -160,7 +160,7 @@ def provision_worker(vmid, student_id):
     wait_for_port(vm_ip, int(get_port(access_method)))
 
     guac_url, expires_at = generate_guac_url(vm_ip, student_id)
-    return student_id, guac_url, expires_at
+    return vmid, student_id, guac_url, expires_at
 
 def run_parallel_provisioning(count):
     # 1. Pre-allocate all VMIDs safely on the main thread, skipping any IDs already in use
@@ -193,8 +193,8 @@ def run_parallel_provisioning(count):
         # Gather results as they finish
         for future in concurrent.futures.as_completed(futures):
             try:
-                student_id, url, expires_at = future.result()
-                results.append((student_id, url, expires_at))
+                vmid, student_id, url, expires_at = future.result()
+                results.append((vmid, student_id, url, expires_at))
                 print(f"✅ {student_id} is ready!")
             except Exception as exc:
                 print(f"❌ VM creation failed: {exc}")
@@ -202,8 +202,8 @@ def run_parallel_provisioning(count):
     # 3. Print the final list cleanly
     print("\n=== ALL WORKSHOP VMS PROVISIONED ===")
     # Sort them so student-1 is at the top
-    results.sort(key=lambda x: int(x[0].split('-')[1]))
-    for student, url, _ in results:
+    results.sort(key=lambda x: int(x[1].split('-')[1]))
+    for _, student, url, _ in results:
         print(f"{student}) {url}")
 
     existing_pool = []
@@ -211,7 +211,7 @@ def run_parallel_provisioning(count):
         with open(pool_output_file) as f:
             existing_pool = json.load(f)
 
-    new_entries = [{"student_id": s, "url": u, "claimed": False, "expires_at": e} for s, u, e in results]
+    new_entries = [{"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e} for v, s, u, e in results]
     full_pool = existing_pool + new_entries
 
     with open(pool_output_file, "w") as f:

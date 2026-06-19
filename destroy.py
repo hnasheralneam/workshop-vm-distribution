@@ -81,9 +81,9 @@ def run_teardown(only_expired=False):
     if only_expired:
         pool = load_pool()
         now = time.time()
-        expired_names = {f"workshop-{entry['student_id']}" for entry in pool if entry.get('expires_at', 0) < now}
-        remaining_pool = [entry for entry in pool if f"workshop-{entry['student_id']}" not in expired_names]
-        target_vms = [vm for vm in target_vms if vm.get('name') in expired_names]
+        expired_vmids = {entry['vmid'] for entry in pool if entry.get('expires_at', 0) < now}
+        remaining_pool = [entry for entry in pool if entry['vmid'] not in expired_vmids]
+        target_vms = [vm for vm in target_vms if vm.get('vmid') in expired_vmids]
 
     if not target_vms:
         print("No matching workshop VMs found. Nothing to destroy!")
