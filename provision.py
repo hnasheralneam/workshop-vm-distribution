@@ -37,6 +37,7 @@ proxmox_token_name = os.getenv("PROXMOX_TOKEN_NAME")
 proxmox_token_secret = os.getenv("PROXMOX_TOKEN_SECRET")
 proxmox_node = os.getenv("PROXMOX_NODE")
 
+access_method = os.getenv("TEMPLATE_VM_ACCESS_METHOD")
 template_vm_id = os.getenv("TEMPLATE_VM_ID")
 vm_username = os.getenv("TEMPLATE_VM_USERNAME")
 vm_password = os.getenv("TEMPLATE_VM_PASSWORD")
@@ -72,13 +73,14 @@ def generate_guac_url(target_ip, student_id):
         "connections": {
             f"Workshop VM - {student_id}": {
                 "id": str(uuid.uuid4()),
-                "protocol": "ssh",
+                "protocol": access_method,
                 "parameters": {
                     "hostname": target_ip,
-                    "port": "22",
+                    "port": get_port(access_method),
                     "username": vm_username,
                     "password": vm_password,
-                    "ignore-cert": "true"
+                    "ignore-cert": "true",
+                    "security": "any"
                 }
             }
         }
@@ -107,6 +109,15 @@ def generate_guac_url(target_ip, student_id):
         return f"{guacamole_url}/?token={response.json().get('authToken')}", expires_at
     return "Error generating Guacamole URL", expires_at
 
+def get_port(access_method):
+    if access_method == "ssh":
+        return "22"
+    elif access_method == "vnc":
+        return "5900"
+    elif access_method == "rdp":
+        return "3389"
+    else:
+        raise ValueError(f"Unrecognized TEMPLATE_VM_ACCESS_METHOD: {access_method!r}")
 
 def get_vm_ip(vmid):
     """Polls the guest-agent until a VALID, routable IPv4 address is found."""
@@ -146,7 +157,7 @@ def provision_worker(vmid, student_id):
     vm_ip = get_vm_ip(vmid)
 
     print(f"[{vmid}] Waiting for SSH...")
-    wait_for_ssh(vm_ip)
+    wait_for_port(vm_ip, int(get_port(access_method)))
 
     guac_url, expires_at = generate_guac_url(vm_ip, student_id)
     return student_id, guac_url, expires_at
@@ -207,13 +218,13 @@ def run_parallel_provisioning(count):
         json.dump(full_pool, f, indent=2)
     print(f"\nAdded {len(new_entries)} VMs to pool (now {len(full_pool)} total)")
 
-def wait_for_ssh(ip):
-    # Attempts a TCP connection to port 22 until the SSH daemon answers.
+def wait_for_port(ip, port):
+    # Attempts a TCP connection to the port until the remote access daemon answers
     while True:
         try:
-            # Attempt to open a socket to port 22
-            with socket.create_connection((ip, 22), timeout=2):
-                # Once it connects, give sshd 2 extra seconds to fully bind/load keys
+            # Attempt to open a socket to the port
+            with socket.create_connection((ip, port), timeout=2):
+                # Once it connects, give the service an 2 extra seconds to fully bind/load keys
                 time.sleep(2)
                 return True
         except (ConnectionRefusedError, socket.timeout, OSError):

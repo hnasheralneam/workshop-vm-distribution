@@ -62,7 +62,13 @@ def destroy_worker(vmid, vm_name):
     except Exception as e:
         return f"❌ Failed to destroy {vm_name} ({vmid}): {e}"
 
-def run_teardown():
+def load_pool():
+    if POOL_OUTPUT_FILE and os.path.exists(POOL_OUTPUT_FILE):
+        with open(POOL_OUTPUT_FILE) as f:
+            return json.load(f)
+    return []
+
+def run_teardown(only_expired=False):
     print(f"\n--- Scanning for VMs with prefix '{WORKSHOP_PREFIX}' ---")
 
     # Fetch all VMs on the node
@@ -71,8 +77,16 @@ def run_teardown():
     # Filter for workshop VMs
     target_vms = [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX)]
 
+    remaining_pool = []
+    if only_expired:
+        pool = load_pool()
+        now = time.time()
+        expired_names = {f"workshop-{entry['student_id']}" for entry in pool if entry.get('expires_at', 0) < now}
+        remaining_pool = [entry for entry in pool if f"workshop-{entry['student_id']}" not in expired_names]
+        target_vms = [vm for vm in target_vms if vm.get('name') in expired_names]
+
     if not target_vms:
-        print("No workshop VMs found. Your cluster is clean!")
+        print("No matching workshop VMs found. Nothing to destroy!")
         return
 
     print(f"Found {len(target_vms)} workshop VMs to destroy.")
@@ -91,13 +105,23 @@ def run_teardown():
 
     if POOL_OUTPUT_FILE:
         with open(POOL_OUTPUT_FILE, "w") as f:
-            json.dump([], f, indent=2)
-        print(f"\nCleared pool file: {POOL_OUTPUT_FILE}")
+            json.dump(remaining_pool, f, indent=2)
+        print(f"\nUpdated pool file: {POOL_OUTPUT_FILE} ({len(remaining_pool)} entries remaining)")
 
 if __name__ == "__main__":
-    # Add a safety prompt to prevent accidental execution
-    confirm = input("⚠️ WARNING: This will immediately power off and destroy all workshop VMs. Type 'yes' to proceed: ")
-    if confirm.strip().lower() == 'yes':
-        run_teardown()
+    choice = input("Destroy ALL workshop VMs (A), only EXPIRED VMs (E), or anything else to quit: ").strip().lower()
+
+    if choice == 'a':
+        confirm = input("⚠️ WARNING: This will immediately power off and destroy ALL workshop VMs. Type 'yes' to proceed: ")
+        if confirm.strip().lower() == 'yes':
+            run_teardown(only_expired=False)
+        else:
+            print("Teardown aborted.")
+    elif choice == 'e':
+        confirm = input("⚠️ WARNING: This will immediately power off and destroy EXPIRED workshop VMs. Type 'yes' to proceed: ")
+        if confirm.strip().lower() == 'yes':
+            run_teardown(only_expired=True)
+        else:
+            print("Teardown aborted.")
     else:
         print("Teardown aborted.")

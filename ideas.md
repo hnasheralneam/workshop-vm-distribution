@@ -1,0 +1,2 @@
+- destroy individual vms/only expired vms
+- admin interface

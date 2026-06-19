@@ -42,5 +42,6 @@ Edit `.env` with your Proxmox and Guacamole details:
 
 ## Notes
 
-View status of all vms at `http://0.0.0.0:5000/status`  
+View status of all vms at `http://0.0.0.0:5000/status`
 Make sure you don't have any important vms named workshop-* in your proxmox! `destroy.py` will delete them
+I'm working on an admin interface for provisioning and destroying vms
