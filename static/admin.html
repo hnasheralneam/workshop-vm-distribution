@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>DawgSec Workshop Admin</title>
+   <link rel="stylesheet" href="/style.css">
+</head>
+
+<body class="admin">
+   <h1>DawgSec Workshop Admin</h1>
+   <p class="subtitle">Provision and tear down workshop VMs</p>
+
+   <div class="grid">
+      <div class="card">
+         <h2>Provision VMs</h2>
+         <form id="provision-form">
+            <label for="vm_count">VM count</label>
+            <input id="vm_count" name="vm_count" type="number" min="1" value="5">
+
+            <fieldset>
+               <legend>Template</legend>
+               <label for="template_vm_access_method">Access method</label>
+               <select id="template_vm_access_method" name="template_vm_access_method">
+                  <option value="ssh">SSH (Linux)</option>
+                  <option value="vnc">VNC (Linux desktop)</option>
+                  <option value="rdp">RDP (Windows)</option>
+               </select>
+               <label for="template_vm_id">Template VM ID</label>
+               <input id="template_vm_id" name="template_vm_id" type="number">
+               <label for="template_vm_username">Template username</label>
+               <input id="template_vm_username" name="template_vm_username" type="text">
+               <label for="template_vm_password">Template password</label>
+               <input id="template_vm_password" name="template_vm_password" type="password"
+                  placeholder="(leave blank to use .env)">
+            </fieldset>
+
+            <button type="submit" id="provision-btn">Provision</button>
+         </form>
+      </div>
+
+      <div class="card">
+         <h2>Destroy VMs</h2>
+         <div class="row">
+            <button class="danger" id="destroy-all-btn">Destroy All</button>
+            <button class="danger" id="destroy-expired-btn">Destroy Expired</button>
+            <button class="danger" id="destroy-selected-btn">Destroy Selected</button>
+            <button class="secondary" id="refresh-pool-btn">Refresh</button>
+         </div>
+         <table>
+            <thead>
+               <tr>
+                  <th></th>
+                  <th>VMID</th>
+                  <th>Student</th>
+                  <th>Status</th>
+                  <th>Expires</th>
+               </tr>
+            </thead>
+            <tbody id="pool-rows"></tbody>
+         </table>
+      </div>
+   </div>
+
+   <div class="card job-status">
+      <h2>Job Status</h2>
+      <p id="job-status">No job running.</p>
+      <div id="job-log"></div>
+   </div>
+
+
+</body>
+<script>
+   const provisionForm = document.getElementById("provision-form");
+   const provisionBtn = document.getElementById("provision-btn");
+   const destroyAllBtn = document.getElementById("destroy-all-btn");
+   const destroyExpiredBtn = document.getElementById("destroy-expired-btn");
+   const destroySelectedBtn = document.getElementById("destroy-selected-btn");
+   const refreshPoolBtn = document.getElementById("refresh-pool-btn");
+   const poolRows = document.getElementById("pool-rows");
+   const jobStatus = document.getElementById("job-status");
+   const jobLog = document.getElementById("job-log");
+
+   let pollHandle = null;
+
+   async function loadDefaults() {
+      const res = await fetch("/api/admin/defaults");
+      if (!res.ok) return;
+      const defaults = await res.json();
+      for (const [key, value] of Object.entries(defaults)) {
+         const field = provisionForm.elements[key];
+         if (field && value !== null && value !== undefined) {
+            field.value = value;
+         }
+      }
+   }
+
+   async function loadPool() {
+      const res = await fetch("/api/admin/pool");
+      if (!res.ok) return;
+      const entries = await res.json();
+      poolRows.innerHTML = "";
+      for (const entry of entries) {
+         const statusLabel = entry.expired ? "expired" : (entry.claimed ? "claimed" : "available");
+         const expiresLabel = entry.expires_at
+            ? new Date(entry.expires_at * 1000).toLocaleString()
+            : "n/a";
+         const tr = document.createElement("tr");
+         tr.innerHTML = `
+									<td><input type="checkbox" class="vm-checkbox" value="${entry.vmid}"></td>
+									<td>${entry.vmid}</td>
+									<td>${entry.student_id ?? ""}</td>
+									<td><span class="status-pill status-${statusLabel}">${statusLabel}</span></td>
+									<td>${expiresLabel}</td>
+								`;
+         poolRows.appendChild(tr);
+      }
+   }
+
+   function setBusy(busy) {
+      provisionBtn.disabled = busy;
+      destroyAllBtn.disabled = busy;
+      destroyExpiredBtn.disabled = busy;
+      destroySelectedBtn.disabled = busy;
+   }
+
+   async function pollJob(jobId) {
+      if (pollHandle) clearInterval(pollHandle);
+      pollHandle = setInterval(async () => {
+         const res = await fetch(`/api/admin/job/${jobId}`);
+         if (!res.ok) return;
+         const job = await res.json();
+         jobStatus.textContent = `${job.kind} — ${job.status}`;
+         jobLog.textContent = job.log.join("\n");
+         jobLog.scrollTop = jobLog.scrollHeight;
+         if (job.status !== "running") {
+            clearInterval(pollHandle);
+            setBusy(false);
+            loadPool();
+         }
+      }, 1500);
+   }
+
+   async function startJob(url, body) {
+      setBusy(true);
+      jobStatus.textContent = "Starting...";
+      jobLog.textContent = "";
+      const res = await fetch(url, {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+         jobStatus.textContent = data.detail || "Failed to start job.";
+         setBusy(false);
+         return;
+      }
+      pollJob(data.job_id);
+   }
+
+   provisionForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const formData = new FormData(provisionForm);
+      const body = {};
+      for (const [key, value] of formData.entries()) {
+         if (value !== "") body[key] = value;
+      }
+      startJob("/api/admin/provision", body);
+   });
+
+   destroyAllBtn.addEventListener("click", () => {
+      if (!confirm("Destroy ALL workshop VMs?")) return;
+      startJob("/api/admin/destroy", { mode: "all" });
+   });
+
+   destroyExpiredBtn.addEventListener("click", () => {
+      if (!confirm("Destroy all EXPIRED workshop VMs?")) return;
+      startJob("/api/admin/destroy", { mode: "expired" });
+   });
+
+   destroySelectedBtn.addEventListener("click", () => {
+      const vmids = [...document.querySelectorAll(".vm-checkbox:checked")].map((el) => parseInt(el.value, 10));
+      if (vmids.length === 0) {
+         alert("Select at least one VM.");
+         return;
+      }
+      if (!confirm(`Destroy ${vmids.length} selected VM(s)?`)) return;
+      startJob("/api/admin/destroy", { mode: "specific", vmids });
+   });
+
+   refreshPoolBtn.addEventListener("click", loadPool);
+
+   loadDefaults();
+   loadPool();
+</script>
+
+</html>
