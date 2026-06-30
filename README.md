@@ -20,7 +20,7 @@ Edit `.env` with your Proxmox and Guacamole details:
 
 - `PROXMOX_URL`, `PROXMOX_USER`, `PROXMOX_TOKEN_NAME`, `PROXMOX_TOKEN_SECRET`, `PROXMOX_NODE`
 - `TEMPLATE_VM_ID`, `TEMPLATE_VM_USERNAME`, `TEMPLATE_VM_PASSWORD`
-- `GUACAMOLE_URL`, `GUACAMOLE_KEY`
+- `GUACAMOLE_URL`, `GUACAMOLE_KEY`, `GUAC_LINK_TTL_SECONDS`
 - `URL_OUTPUT_FILE`, `VM_COUNT`
 
 ## CLI Usage
@@ -38,7 +38,7 @@ Edit `.env` with your Proxmox and Guacamole details:
    ```
 
 ## Admin portal
-`http://0.0.0.0:5000/admin` provides a web UI for provisioning and destroying VMs without touching the CLI — set `ADMIN_PASSWORD` in `.env` to protect it (HTTP Basic Auth). From there you can kick off a provisioning run with overridden settings (template, access method, VM count, etc.), destroy all/expired/selected VMs, and watch job progress and the live pool table.
+`http://0.0.0.0:5000/admin` provides a web UI for provisioning and destroying VMs without touching the CLI — set `ADMIN_PASSWORD` in `.env` to protect it (HTTP Basic Auth). From there you can kick off a provisioning run with overridden settings (template, access method, VM count, VM duration, etc.), destroy all/expired/selected VMs, and watch job progress and the live pool table.
 
 ## Notes
 Make sure you don't have any important vms named workshop-* in your proxmox! `destroy.py` will delete them

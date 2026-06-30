@@ -19,6 +19,9 @@
             <label for="vm_count">VM count</label>
             <input id="vm_count" name="vm_count" type="number" min="1" value="5">
 
+            <label for="vm_duration_hours">VM duration (hours)</label>
+            <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="0.5" value="2">
+
             <fieldset>
                <legend>Template</legend>
                <label for="template_vm_access_method">Access method</label>
@@ -89,10 +92,15 @@
       if (!res.ok) return;
       const defaults = await res.json();
       for (const [key, value] of Object.entries(defaults)) {
+         if (key === "guac_link_ttl_seconds") continue;
          const field = provisionForm.elements[key];
          if (field && value !== null && value !== undefined) {
             field.value = value;
          }
+      }
+      const hoursField = provisionForm.elements["vm_duration_hours"];
+      if (hoursField && defaults.guac_link_ttl_seconds != null) {
+         hoursField.value = defaults.guac_link_ttl_seconds / 3600;
       }
    }
 
@@ -165,8 +173,18 @@
       const formData = new FormData(provisionForm);
       const body = {};
       for (const [key, value] of formData.entries()) {
+         if (key === "vm_duration_hours") continue;
          if (value !== "") body[key] = value;
       }
+
+      const durationHours = formData.get("vm_duration_hours");
+      if (durationHours !== null && durationHours !== "") {
+         const hours = parseFloat(durationHours);
+         if (!Number.isNaN(hours) && hours > 0) {
+            body.guac_link_ttl_seconds = Math.round(hours * 3600);
+         }
+      }
+
       startJob("/api/admin/provision", body);
    });
 
