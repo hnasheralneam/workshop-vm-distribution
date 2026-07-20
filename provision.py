@@ -1,3 +1,4 @@
+import fcntl
 import time
 import json
 import hmac
@@ -26,6 +27,8 @@ INT_FIELDS = {"template_vm_id", "guac_link_ttl_seconds", "vm_count"}
 
 # Fields considered sensitive; never echoed back to a UI.
 SECRET_FIELDS = {"proxmox_token_secret", "template_vm_password", "guacamole_key"}
+
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() in ("true", "1", "yes")
 
 
 def default_config():
@@ -78,7 +81,7 @@ def get_proxmox_client(config):
         user=config["proxmox_user"],
         token_name=config["proxmox_token_name"],
         token_value=config["proxmox_token_secret"],
-        verify_ssl=False
+        verify_ssl=VERIFY_SSL
     )
     if config["proxmox_scheme"] == "http":
         proxmox._store["base_url"] = proxmox._store["base_url"].replace("https://", "http://", 1)
@@ -137,21 +140,22 @@ def generate_guac_url(config, target_ip, student_id):
 
     response = requests.post(
         f"{config['guacamole_url']}/api/tokens",
-        data={"data": base64_encrypted}
+        data={"data": base64_encrypted},
+        timeout=15
     )
 
     if response.status_code == 200:
         return f"{config['guacamole_url']}/?token={response.json().get('authToken')}", expires_at
-    return "Error generating Guacamole URL", expires_at
+    raise RuntimeError(f"Guacamole token request failed: {response.status_code} {response.text}")
 
 
 def get_vm_ip(proxmox, config, vmid):
     """Polls the guest-agent until a VALID, routable IPv4 address is found."""
-    while True:
+    deadline = time.time() + 120
+    while time.time() < deadline:
         try:
             interfaces = proxmox.nodes(config["proxmox_node"]).qemu(vmid).agent.get("network-get-interfaces")
             for interface in interfaces.get('result', []):
-                # Ignore loopback and common virtual interfaces
                 if interface['name'] in ['lo', 'docker0']:
                     continue
 
@@ -159,29 +163,26 @@ def get_vm_ip(proxmox, config, vmid):
                     if ip_info['ip-address-type'] == 'ipv4':
                         ip = ip_info['ip-address']
 
-                        # Ignore APIPA (DHCP failure) and Docker default subnets
                         if ip.startswith("127.") or ip.startswith("169.254") or ip.startswith("172.17"):
                             continue
 
-                        # We found a real IP!
                         return ip
         except Exception:
             pass
         time.sleep(3)
+    raise TimeoutError(f"VM {vmid} did not obtain a valid IP within 120 seconds")
 
 
 def wait_for_port(ip, port):
-    # Attempts a TCP connection to the port until the remote access daemon answers
-    while True:
+    deadline = time.time() + 120
+    while time.time() < deadline:
         try:
-            # Attempt to open a socket to the port
             with socket.create_connection((ip, port), timeout=2):
-                # Once it connects, give the service an 2 extra seconds to fully bind/load keys
                 time.sleep(2)
                 return True
         except (ConnectionRefusedError, socket.timeout, OSError):
-            # Port is closed or unreachable, wait and try again
             time.sleep(3)
+    raise TimeoutError(f"Port {port} on {ip} did not open within 120 seconds")
 
 
 def provision_worker(proxmox, config, vmid, student_id, log):
@@ -195,14 +196,28 @@ def provision_worker(proxmox, config, vmid, student_id, log):
     log(f"[{vmid}] Booting VM...")
     node.qemu(vmid).status.start.post()
 
-    log(f"[{vmid}] Waiting for IP...")
-    vm_ip = get_vm_ip(proxmox, config, vmid)
+    try:
+        log(f"[{vmid}] Waiting for IP...")
+        vm_ip = get_vm_ip(proxmox, config, vmid)
 
-    log(f"[{vmid}] Waiting for {access_method}...")
-    wait_for_port(vm_ip, int(get_port(access_method)))
+        log(f"[{vmid}] Waiting for {access_method}...")
+        wait_for_port(vm_ip, int(get_port(access_method)))
 
-    guac_url, expires_at = generate_guac_url(config, vm_ip, student_id)
-    return vmid, student_id, guac_url, expires_at
+        guac_url, expires_at = generate_guac_url(config, vm_ip, student_id)
+        return vmid, student_id, guac_url, expires_at
+    except Exception as exc:
+        log(f"[{vmid}] Provision failed: {exc}. Cleaning up VM...")
+        try:
+            status = node.qemu(vmid).status.current.get()
+            if status.get("status") == "running":
+                node.qemu(vmid).status.stop.post()
+        except Exception:
+            pass
+        try:
+            node.qemu(vmid).delete()
+        except Exception:
+            pass
+        raise
 
 
 def run_parallel_provisioning(config, count=None, log=print):
@@ -244,7 +259,7 @@ def run_parallel_provisioning(config, count=None, log=print):
             try:
                 vmid, student_id, url, expires_at = future.result()
                 results.append((vmid, student_id, url, expires_at))
-                log(f"✅ {student_id} is ready!")
+                log(f"✅ {student_id} is ready! (token URL stored)")
             except Exception as exc:
                 log(f"❌ VM creation failed: {exc}")
 
@@ -256,20 +271,27 @@ def run_parallel_provisioning(config, count=None, log=print):
         log(f"{student}) {url}")
 
     pool_output_file = config["url_output_file"]
-    existing_pool = []
-    if os.path.exists(pool_output_file):
-        with open(pool_output_file) as f:
-            existing_pool = json.load(f)
+    with open(pool_output_file, "a+") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            content = f.read()
+            existing_pool = json.loads(content) if content else []
 
-    access_method = config["template_vm_access_method"]
-    new_entries = [
-        {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e, "access_method": access_method}
-        for v, s, u, e in results
-    ]
-    full_pool = existing_pool + new_entries
+            access_method = config["template_vm_access_method"]
+            new_entries = [
+                {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e, "access_method": access_method}
+                for v, s, u, e in results
+            ]
+            full_pool = existing_pool + new_entries
 
-    with open(pool_output_file, "w") as f:
-        json.dump(full_pool, f, indent=2)
+            f.seek(0)
+            f.truncate()
+            json.dump(full_pool, f, indent=2)
+            f.flush()
+            os.fchmod(f.fileno(), 0o600)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     log(f"\nAdded {len(new_entries)} VMs to pool (now {len(full_pool)} total)")
 
     return new_entries

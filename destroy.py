@@ -1,3 +1,4 @@
+import fcntl
 import time
 import json
 import concurrent.futures
@@ -12,6 +13,8 @@ load_dotenv()
 
 # The critical safety net: Only VMs starting with this prefix will be touched
 WORKSHOP_PREFIX = "workshop-"
+
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() in ("true", "1", "yes")
 
 
 def default_config():
@@ -51,7 +54,7 @@ def get_proxmox_client(config):
         user=config["proxmox_user"],
         token_name=config["proxmox_token_name"],
         token_value=config["proxmox_token_secret"],
-        verify_ssl=False
+        verify_ssl=VERIFY_SSL
     )
     if config["proxmox_scheme"] == "http":
         proxmox._store["base_url"] = proxmox._store["base_url"].replace("https://", "http://", 1)
@@ -89,8 +92,12 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
 
 def load_pool(pool_output_file):
     if pool_output_file and os.path.exists(pool_output_file):
-        with open(pool_output_file) as f:
-            return json.load(f)
+        with open(pool_output_file, "r") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                return json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     return []
 
 
@@ -147,8 +154,16 @@ def run_teardown(config, mode="all", vmids=None, log=print):
         log(result)
 
     if pool_output_file:
-        with open(pool_output_file, "w") as f:
-            json.dump(remaining_pool, f, indent=2)
+        tmp = pool_output_file + ".tmp"
+        with open(tmp, "w") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                json.dump(remaining_pool, f, indent=2)
+                f.flush()
+                os.fchmod(f.fileno(), 0o600)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        os.replace(tmp, pool_output_file)
         log(f"\nUpdated pool file: {pool_output_file} ({len(remaining_pool)} entries remaining)")
 
     return results

@@ -1,3 +1,5 @@
+import fcntl
+import hmac
 import json
 import os
 import random
@@ -10,6 +12,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 import destroy
 import provision
@@ -22,6 +26,7 @@ POOL_POLL_INTERVAL_SECONDS = 5
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 app = Flask(__name__, static_folder=None)
+limiter = Limiter(app=app, key_func=get_remote_address, default_limits=[])
 lock = threading.Lock()
 
 job_lock = threading.Lock()
@@ -31,8 +36,13 @@ current_job = None  # {"id", "kind", "status", "log": [...], "started_at", "fini
 def load_pool():
     if not POOL_FILE.exists():
         return []
-    with open(POOL_FILE) as f:
-        return json.load(f)
+    with open(POOL_FILE, "r") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+        try:
+            data = json.load(f)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    return data
 
 
 pool = load_pool()
@@ -41,8 +51,16 @@ pool_mtime = POOL_FILE.stat().st_mtime if POOL_FILE.exists() else None
 
 def save_pool():
     global pool_mtime
-    with open(POOL_FILE, "w") as f:
-        json.dump(pool, f, indent=2)
+    tmp = POOL_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            json.dump(pool, f, indent=2)
+            f.flush()
+            os.fchmod(f.fileno(), 0o600)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    os.replace(str(tmp), str(POOL_FILE))
     pool_mtime = POOL_FILE.stat().st_mtime
 
 
@@ -93,9 +111,17 @@ def types():
         return jsonify(types=available_types)
 
 
-@app.route("/api/claim")
+def _redact_token(url):
+    if "?token=" in url:
+        return url.rsplit("?token=", 1)[0] + "?token=REDACTED"
+    return url
+
+
+@app.route("/api/claim", methods=["POST"])
+@limiter.limit("5/minute")
 def claim():
-    requested_os = request.args.get("os")
+    body = request.get_json(silent=True) or {}
+    requested_os = body.get("os")
     with lock:
         available = [entry for entry in pool if is_available(entry)]
         if requested_os:
@@ -106,12 +132,13 @@ def claim():
         entry = random.choice(available)
         entry["claimed"] = True
         save_pool()
-        return jsonify(url=entry["url"])
+        return jsonify(url=_redact_token(entry["url"]))
 
 
-@app.route("/api/validate")
+@app.route("/api/validate", methods=["POST"])
 def validate():
-    url = request.args.get("url", "")
+    body = request.get_json(silent=True) or {}
+    url = body.get("url", "")
     with lock:
         entry = next((e for e in pool if e["url"] == url and e["claimed"]), None)
         if entry is None:
@@ -119,16 +146,8 @@ def validate():
 
         if is_expired(entry):
             entry["claimed"] = False
-
-            available = [e for e in pool if is_available(e) and os_type(e) == os_type(entry)]
-            if not available:
-                save_pool()
-                return jsonify(valid=False, expired=True)
-
-            replacement = random.choice(available)
-            replacement["claimed"] = True
             save_pool()
-            return jsonify(valid=False, expired=True, url=replacement["url"])
+            return jsonify(valid=False, expired=True, expires_at=entry.get("expires_at"))
 
         return jsonify(valid=True)
 
@@ -146,7 +165,7 @@ def admin_required(f):
         if not ADMIN_PASSWORD:
             return jsonify(detail="ADMIN_PASSWORD is not set on the server."), 503
         auth = request.authorization
-        if not auth or auth.password != ADMIN_PASSWORD:
+        if not auth or not hmac.compare_digest(auth.password, ADMIN_PASSWORD):
             return jsonify(detail="Authentication required."), 401, {
                 "WWW-Authenticate": 'Basic realm="Admin"'
             }
@@ -270,12 +289,14 @@ def admin_destroy():
 @app.route("/api/admin/job/<job_id>")
 @admin_required
 def admin_job(job_id=None):
-    if current_job is None or (job_id and current_job["id"] != job_id):
-        return jsonify(detail="No such job."), 404
-    return jsonify(current_job)
+    with job_lock:
+        if current_job is None or (job_id and current_job["id"] != job_id):
+            return jsonify(detail="No such job."), 404
+        job_snapshot = {k: v for k, v in current_job.items()}
+    return jsonify(job_snapshot)
 
 
 if __name__ == "__main__":
     print(f"Loaded {len(pool)} VM(s) from {POOL_FILE}")
     threading.Thread(target=watch_pool_file, daemon=True).start()
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="127.0.0.1", port=5000)
