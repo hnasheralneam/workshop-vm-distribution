@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import destroy
 import provision
@@ -26,6 +27,7 @@ POOL_POLL_INTERVAL_SECONDS = 5
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 app = Flask(__name__, static_folder=None)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 limiter = Limiter(app=app, key_func=get_remote_address, default_limits=[])
 lock = threading.Lock()
 
@@ -111,14 +113,8 @@ def types():
         return jsonify(types=available_types)
 
 
-def _redact_token(url):
-    if "?token=" in url:
-        return url.rsplit("?token=", 1)[0] + "?token=REDACTED"
-    return url
-
-
 @app.route("/api/claim", methods=["POST"])
-@limiter.limit("5/minute")
+@limiter.limit("10/minute")
 def claim():
     body = request.get_json(silent=True) or {}
     requested_os = body.get("os")
@@ -132,10 +128,11 @@ def claim():
         entry = random.choice(available)
         entry["claimed"] = True
         save_pool()
-        return jsonify(url=_redact_token(entry["url"]))
+        return jsonify(url=entry["url"])
 
 
 @app.route("/api/validate", methods=["POST"])
+@limiter.limit("30/minute")
 def validate():
     body = request.get_json(silent=True) or {}
     url = body.get("url", "")
@@ -146,8 +143,15 @@ def validate():
 
         if is_expired(entry):
             entry["claimed"] = False
+            available = [e for e in pool if is_available(e) and os_type(e) == os_type(entry)]
+            if not available:
+                save_pool()
+                return jsonify(valid=False, expired=True, expires_at=entry.get("expires_at"))
+
+            replacement = random.choice(available)
+            replacement["claimed"] = True
             save_pool()
-            return jsonify(valid=False, expired=True, expires_at=entry.get("expires_at"))
+            return jsonify(valid=False, expired=True, url=replacement["url"])
 
         return jsonify(valid=True)
 

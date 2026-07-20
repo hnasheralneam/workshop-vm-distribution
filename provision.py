@@ -9,6 +9,7 @@ import concurrent.futures
 import socket
 import requests
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from proxmoxer import ProxmoxAPI
@@ -33,6 +34,9 @@ VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 def default_config():
     """Config derived from the environment. Used by the CLI and as a base for overrides."""
+    url_output_file = os.getenv("URL_OUTPUT_FILE", "pool.json")
+    if not os.path.isabs(url_output_file):
+        url_output_file = str(Path(__file__).parent / url_output_file)
     return {
         "proxmox_url": os.getenv("PROXMOX_URL"),
         "proxmox_user": os.getenv("PROXMOX_USER"),
@@ -46,7 +50,7 @@ def default_config():
         "guacamole_url": os.getenv("GUACAMOLE_URL"),
         "guacamole_key": os.getenv("GUACAMOLE_KEY"),
         "guac_link_ttl_seconds": os.getenv("GUAC_LINK_TTL_SECONDS", 7200),
-        "url_output_file": os.getenv("URL_OUTPUT_FILE"),
+        "url_output_file": url_output_file,
         "vm_count": os.getenv("VM_COUNT", 5),
     }
 
@@ -264,11 +268,14 @@ def run_parallel_provisioning(config, count=None, log=print):
                 log(f"❌ VM creation failed: {exc}")
 
     # 3. Print the final list cleanly
-    log("\n=== ALL WORKSHOP VMS PROVISIONED ===")
-    # Sort them so student-1 is at the top
-    results.sort(key=lambda x: int(x[1].split('-')[1]))
-    for _, student, url, _ in results:
-        log(f"{student}) {url}")
+    if results:
+        log("\n=== ALL WORKSHOP VMS PROVISIONED ===")
+        # Sort them so student-1 is at the top
+        results.sort(key=lambda x: int(x[1].split('-')[1]))
+        for _, student, url, _ in results:
+            log(f"{student}) {url}")
+    else:
+        log("\n=== NO WORKSHOP VMS WERE PROVISIONED ===")
 
     pool_output_file = config["url_output_file"]
     with open(pool_output_file, "a+") as f:

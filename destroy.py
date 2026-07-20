@@ -3,6 +3,7 @@ import time
 import json
 import concurrent.futures
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from proxmoxer import ProxmoxAPI
 
@@ -14,17 +15,20 @@ load_dotenv()
 # The critical safety net: Only VMs starting with this prefix will be touched
 WORKSHOP_PREFIX = "workshop-"
 
-VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() in ("true", "1", "yes")
+VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 
 def default_config():
+    url_output_file = os.getenv("URL_OUTPUT_FILE", "pool.json")
+    if not os.path.isabs(url_output_file):
+        url_output_file = str(Path(__file__).parent / url_output_file)
     return {
         "proxmox_url": os.getenv("PROXMOX_URL"),
         "proxmox_user": os.getenv("PROXMOX_USER"),
         "proxmox_token_name": os.getenv("PROXMOX_TOKEN_NAME"),
         "proxmox_token_secret": os.getenv("PROXMOX_TOKEN_SECRET"),
         "proxmox_node": os.getenv("PROXMOX_NODE"),
-        "url_output_file": os.getenv("URL_OUTPUT_FILE"),
+        "url_output_file": url_output_file,
     }
 
 
@@ -62,7 +66,7 @@ def get_proxmox_client(config):
 
 
 def destroy_worker(proxmox, node_name, vmid, vm_name, log):
-    """Worker task to safely stop and destroy a single VM."""
+    """Worker task to safely stop and destroy a single VM. Raises on failure."""
     node = proxmox.nodes(node_name)
 
     try:
@@ -75,11 +79,14 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
             node.qemu(vmid).status.stop.post()
 
             # Poll until the VM is actually stopped
-            while True:
+            deadline = time.time() + 120
+            while time.time() < deadline:
                 time.sleep(2)
                 status = node.qemu(vmid).status.current.get().get("status")
                 if status == "stopped":
                     break
+            else:
+                raise TimeoutError(f"VM {vmid} did not stop within 120 seconds")
 
         # 3. Destroy the VM
         log(f"[{vmid}] 💥 Destroying {vm_name}...")
@@ -87,7 +94,7 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
         return f"✅ Successfully destroyed {vm_name} ({vmid})"
 
     except Exception as e:
-        return f"❌ Failed to destroy {vm_name} ({vmid}): {e}"
+        raise RuntimeError(f"❌ Failed to destroy {vm_name} ({vmid}): {e}") from e
 
 
 def load_pool(pool_output_file):
@@ -115,22 +122,16 @@ def run_teardown(config, mode="all", vmids=None, log=print):
     target_vms = [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX)]
 
     pool = load_pool(pool_output_file)
-    remaining_pool = pool
-    removed_vmids = set()
 
     if mode == "specific":
         wanted = {int(v) for v in (vmids or [])}
         target_vms = [vm for vm in target_vms if vm.get('vmid') in wanted]
-        removed_vmids = {vm['vmid'] for vm in target_vms}
-        remaining_pool = [entry for entry in pool if entry['vmid'] not in removed_vmids]
     elif mode == "expired":
         now = time.time()
-        removed_vmids = {entry['vmid'] for entry in pool if entry.get('expires_at', 0) < now}
-        remaining_pool = [entry for entry in pool if entry['vmid'] not in removed_vmids]
-        target_vms = [vm for vm in target_vms if vm.get('vmid') in removed_vmids]
+        expired_vmids = {entry['vmid'] for entry in pool if entry.get('expires_at') is not None and entry['expires_at'] < now}
+        target_vms = [vm for vm in target_vms if vm.get('vmid') in expired_vmids]
     else:  # all
-        removed_vmids = {vm['vmid'] for vm in target_vms}
-        remaining_pool = []
+        pass
 
     if not target_vms:
         log("No matching workshop VMs found. Nothing to destroy!")
@@ -140,6 +141,7 @@ def run_teardown(config, mode="all", vmids=None, log=print):
 
     # Execute the destruction in parallel
     results = []
+    destroyed_vmids = set()
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
             executor.submit(destroy_worker, proxmox, config["proxmox_node"], vm['vmid'], vm['name'], log): vm
@@ -147,13 +149,20 @@ def run_teardown(config, mode="all", vmids=None, log=print):
         }
 
         for future in concurrent.futures.as_completed(futures):
-            results.append(future.result())
+            vm = futures[future]
+            try:
+                results.append(future.result())
+                destroyed_vmids.add(vm['vmid'])
+            except Exception as exc:
+                results.append(str(exc))
 
     log("\n=== TEARDOWN COMPLETE ===")
     for result in results:
         log(result)
 
     if pool_output_file:
+        current_pool = load_pool(pool_output_file)
+        remaining_pool = [entry for entry in current_pool if entry.get('vmid') not in destroyed_vmids]
         tmp = pool_output_file + ".tmp"
         with open(tmp, "w") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)

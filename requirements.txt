@@ -1,0 +1,7 @@
+Flask==3.0.3
+Flask-Limiter==4.1.1
+Werkzeug==3.1.8
+python-dotenv==1.2.2
+proxmoxer==2.3.0
+requests==2.33.1
+cryptography==48.0.0
