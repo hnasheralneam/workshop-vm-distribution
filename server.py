@@ -299,4 +299,4 @@ def admin_job(job_id=None):
 if __name__ == "__main__":
     print(f"Loaded {len(pool)} VM(s) from {POOL_FILE}")
     threading.Thread(target=watch_pool_file, daemon=True).start()
-    app.run(host="127.0.0.1", port=5000)
+    app.run(host="0.0.0.0", port=5000)
