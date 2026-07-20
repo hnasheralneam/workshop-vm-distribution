@@ -69,7 +69,11 @@
 			// it may have been deleted/recreated by the instructor in the meantime.
 			async function checkExistingVm() {
 				try {
-					const response = await fetch(`/api/validate?url=${encodeURIComponent(existingUrl)}`);
+					const response = await fetch("/api/validate", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ url: existingUrl })
+					});
 					const data = await response.json();
 
 					if (!data.valid) {
@@ -108,8 +112,11 @@
 				status.innerText = "Assigning your machine...";
 
 				try {
-					const query = os ? `?os=${encodeURIComponent(os)}` : "";
-					const response = await fetch(`/api/claim${query}`);
+					const response = await fetch("/api/claim", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(os ? { os } : {})
+					});
 					const data = await response.json();
 
 					if (response.ok) {

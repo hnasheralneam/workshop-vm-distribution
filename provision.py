@@ -28,7 +28,7 @@ INT_FIELDS = {"template_vm_id", "guac_link_ttl_seconds", "vm_count"}
 # Fields considered sensitive; never echoed back to a UI.
 SECRET_FIELDS = {"proxmox_token_secret", "template_vm_password", "guacamole_key"}
 
-VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() in ("true", "1", "yes")
+VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 
 def default_config():
