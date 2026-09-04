@@ -106,6 +106,11 @@ def style():
     return send_from_directory(BASE_DIR / "static", "style.css")
 
 
+@app.route("/images/<path:filename>")
+def images(filename):
+    return send_from_directory(BASE_DIR / "images", filename)
+
+
 @app.route("/api/types")
 def types():
     with lock:

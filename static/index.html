@@ -137,6 +137,13 @@
 			}
 
 			init();
+
+			function selectRandomBackground() {
+				let backgrounds = ["bliss.jpg", "macos.jpg", "penguins.png", "trig.png"];
+				let index = Math.round(Math.random() * (backgrounds.length - 1));
+				document.body.style.backgroundImage = `url('/images/${backgrounds[index]}')`;
+			}
+			selectRandomBackground();
 		</script>
 	</body>
 </html>
