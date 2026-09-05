@@ -100,10 +100,35 @@
 			}
 
 			async function handleTerminalAccess(os, btn) {
-				// 3. If they already have a VM, just redirect them back to it
+				// 3. If they already have a VM, mint a fresh session, then redirect
 				if (existingUrl) {
-					status.innerText = "Redirecting...";
-					window.location.href = existingUrl;
+					setButtonsDisabled(true);
+					status.innerText = "Reconnecting...";
+					try {
+						const response = await fetch("/api/reconnect", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ url: existingUrl })
+						});
+						const data = await response.json();
+						if (response.ok && data.url) {
+							localStorage.setItem("assigned_vm_url", data.url);
+							existingUrl = data.url;
+							status.innerText = "Redirecting...";
+							window.location.href = data.url;
+						} else if (data.expired) {
+							localStorage.removeItem("assigned_vm_url");
+							existingUrl = null;
+							status.innerText = "Your machine expired. Claim a new one below.";
+							await init();
+						} else {
+							status.innerText = data.detail || "Reconnect failed. Please try again.";
+							setButtonsDisabled(false);
+						}
+					} catch (error) {
+						status.innerText = "Network error. Please try again.";
+						setButtonsDisabled(false);
+					}
 					return;
 				}
 

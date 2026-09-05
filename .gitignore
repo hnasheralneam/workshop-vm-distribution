@@ -2,3 +2,8 @@
 venv/
 pool.json
 __pycache__/
+# per-OS override files (contain Proxmox/Guacamole secrets); backups; runtime logs
+.env-linux
+.env-win
+*.bak-*
+server.log

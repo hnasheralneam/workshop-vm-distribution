@@ -153,9 +153,9 @@ def generate_guac_url(config, target_ip, student_id):
     raise RuntimeError(f"Guacamole token request failed: {response.status_code} {response.text}")
 
 
-def get_vm_ip(proxmox, config, vmid):
+def get_vm_ip(proxmox, config, vmid, timeout=120):
     """Polls the guest-agent until a VALID, routable IPv4 address is found."""
-    deadline = time.time() + 120
+    deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             interfaces = proxmox.nodes(config["proxmox_node"]).qemu(vmid).agent.get("network-get-interfaces")
@@ -174,7 +174,7 @@ def get_vm_ip(proxmox, config, vmid):
         except Exception:
             pass
         time.sleep(3)
-    raise TimeoutError(f"VM {vmid} did not obtain a valid IP within 120 seconds")
+    raise TimeoutError(f"VM {vmid} did not obtain a valid IP within {timeout} seconds")
 
 
 def wait_for_port(ip, port):
@@ -308,3 +308,54 @@ if __name__ == "__main__":
     cli_config = build_config()
     print(f"=== Creating {cli_config['vm_count']} workshop VMs ===")
     run_parallel_provisioning(cli_config)
+
+# ==========================================
+# Fresh session minting (reconnect support)
+# ==========================================
+import re
+
+RECONNECT_IP_TIMEOUT = 30
+POOL_PARENT = Path(__file__).parent
+
+
+def load_env_file(path):
+    """Parse a KEY=VAL env file (supports quoted values + trailing ' # comment')."""
+    values = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            val = re.sub(r"\s+#.*$", "", val.strip()).strip().strip('"').strip("'")
+            values[key.strip().lower()] = val
+    return values
+
+
+def config_for_access_method(access_method):
+    """Config for re-minting: per-OS env file (.env-linux for ssh/vnc, .env-win for rdp)."""
+    name = ".env-win" if access_method == "rdp" else ".env-linux"
+    return build_config(load_env_file(str(POOL_PARENT / name)))
+
+
+def mint_session_url(entry, log=print):
+    """Mint a brand-new Guacamole session URL for an existing pool entry.
+
+    Looks up the VM's CURRENT IP via the guest agent (DHCP may have changed
+    since provisioning) and POSTs a fresh encrypted payload to /api/tokens.
+    Raises RuntimeError if the VM is gone, stopped, or unreachable.
+    """
+    access_method = entry.get("access_method") or "ssh"
+    config = config_for_access_method(access_method)
+    proxmox = get_proxmox_client(config)
+    vmid = entry["vmid"]
+    try:
+        status = proxmox.nodes(config["proxmox_node"]).qemu(vmid).status.current.get()
+    except Exception as exc:
+        raise RuntimeError(f"VM {vmid} not found on Proxmox: {exc}")
+    if status.get("status") != "running":
+        raise RuntimeError(f"VM {vmid} is not running (status={status.get('status')})")
+    vm_ip = get_vm_ip(proxmox, config, vmid, timeout=RECONNECT_IP_TIMEOUT)
+    url, _ = generate_guac_url(config, vm_ip, entry.get("student_id") or f"vm-{vmid}")
+    log(f"[{vmid}] Minted fresh session URL (ip={vm_ip})")
+    return url

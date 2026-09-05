@@ -132,6 +132,12 @@ def claim():
 
         entry = random.choice(available)
         entry["claimed"] = True
+        try:
+            entry["url"] = provision.mint_session_url(entry)
+        except Exception as exc:
+            entry["claimed"] = False
+            save_pool()
+            return jsonify(detail=f"VM is not reachable right now ({exc}). Please contact your instructor."), 502
         save_pool()
         return jsonify(url=entry["url"])
 
@@ -154,11 +160,42 @@ def validate():
                 return jsonify(valid=False, expired=True, expires_at=entry.get("expires_at"))
 
             replacement = random.choice(available)
+            try:
+                replacement["url"] = provision.mint_session_url(replacement)
+            except Exception as exc:
+                save_pool()
+                return jsonify(valid=False, expired=True, detail=str(exc))
             replacement["claimed"] = True
             save_pool()
             return jsonify(valid=False, expired=True, url=replacement["url"])
 
         return jsonify(valid=True)
+
+
+@app.route("/api/reconnect", methods=["POST"])
+@limiter.limit("10/minute")
+def reconnect():
+    """Mint a FRESH Guacamole session for a previously assigned workshop VM.
+
+    Stored ?token= URLs are Guacamole session tokens (~60min idle timeout),
+    so replaying them later lands on the login page. Re-minting at click time
+    (with the VM's current IP) keeps Reconnect working for the pool lifetime.
+    """
+    body = request.get_json(silent=True) or {}
+    url = body.get("url", "")
+    with lock:
+        entry = next((e for e in pool if e.get("url") == url), None)
+        if entry is None:
+            return jsonify(valid=False), 404
+        if is_expired(entry):
+            return jsonify(valid=False, expired=True), 410
+        try:
+            fresh = provision.mint_session_url(entry)
+        except Exception as exc:
+            return jsonify(valid=False, detail=str(exc)), 502
+        entry["url"] = fresh
+        save_pool()
+        return jsonify(valid=True, url=fresh)
 
 
 def reload_pool():
