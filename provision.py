@@ -289,7 +289,9 @@ def run_parallel_provisioning(config, count=None, log=print):
             access_method = config["template_vm_access_method"]
             new_entries = [
                 {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e,
-                 "access_method": access_method, "pool": config["pool_name"]}
+                 "access_method": access_method, "pool": config["pool_name"],
+                 "template_vm_username": config["template_vm_username"],
+                 "template_vm_password": config["template_vm_password"]}
                 for v, s, u, e in results
             ]
             full_pool = existing_pool + new_entries
@@ -314,30 +316,8 @@ if __name__ == "__main__":
 # ==========================================
 # Fresh session minting (reconnect support)
 # ==========================================
-import re
 
 RECONNECT_IP_TIMEOUT = 30
-POOL_PARENT = Path(__file__).parent
-
-
-def load_env_file(path):
-    """Parse a KEY=VAL env file (supports quoted values + trailing ' # comment')."""
-    values = {}
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            val = re.sub(r"\s+#.*$", "", val.strip()).strip().strip('"').strip("'")
-            values[key.strip().lower()] = val
-    return values
-
-
-def config_for_access_method(access_method):
-    """Config for re-minting: per-OS env file (.env-linux for ssh/vnc, .env-win for rdp)."""
-    name = ".env-win" if access_method == "rdp" else ".env-linux"
-    return build_config(load_env_file(str(POOL_PARENT / name)))
 
 
 def mint_session_url(entry, log=print):
@@ -346,9 +326,20 @@ def mint_session_url(entry, log=print):
     Looks up the VM's CURRENT IP via the guest agent (DHCP may have changed
     since provisioning) and POSTs a fresh encrypted payload to /api/tokens.
     Raises RuntimeError if the VM is gone, stopped, or unreachable.
+
+    Reuses the access method + credentials this specific VM was actually
+    provisioned with (stored on the entry by run_parallel_provisioning),
+    layered on the base .env for the Proxmox/Guacamole connection details
+    that are the same for every VM regardless of template. Older pool
+    entries from before these fields existed fall back to the .env
+    defaults, same as before -- build_config()'s override merge already
+    skips None/empty values.
     """
-    access_method = entry.get("access_method") or "ssh"
-    config = config_for_access_method(access_method)
+    config = build_config({
+        "template_vm_access_method": entry.get("access_method"),
+        "template_vm_username": entry.get("template_vm_username"),
+        "template_vm_password": entry.get("template_vm_password"),
+    })
     proxmox = get_proxmox_client(config)
     vmid = entry["vmid"]
     try:
