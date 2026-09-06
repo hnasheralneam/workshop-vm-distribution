@@ -24,6 +24,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent
 POOL_FILE = BASE_DIR / "pool.json"
 POOL_POLL_INTERVAL_SECONDS = 5
+REAP_INTERVAL_SECONDS = int(os.getenv("REAP_INTERVAL_SECONDS", "60"))
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 app = Flask(__name__, static_folder=None)
@@ -94,6 +95,32 @@ def watch_pool_file():
                 pool = load_pool()
                 pool_mtime = mtime
             print(f"Reloaded pool.json: now {len(pool)} VM(s)")
+
+
+def reap_expired_vms():
+    """Background thread: destroys VMs on Proxmox once their expires_at time limit passes.
+
+    Delegates to destroy.run_teardown(mode="expired"), which stops/destroys the VMs
+    and prunes them from pool.json; watch_pool_file then reloads the pruned pool.
+    """
+    while True:
+        time.sleep(REAP_INTERVAL_SECONDS)
+        try:
+            entries = load_pool()
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not any(is_expired(entry) for entry in entries):
+            continue
+        with job_lock:
+            job_running = current_job is not None and current_job["status"] == "running"
+        if job_running:
+            print("Reaper: skipping cycle, an admin job is running")
+            continue
+        try:
+            results = destroy.run_teardown(destroy.build_config(), mode="expired")
+            print(f"Reaper: destroyed {len(results)} expired VM(s)")
+        except Exception as exc:
+            print(f"Reaper: teardown failed, will retry next cycle: {exc}")
 
 
 @app.route("/")
@@ -345,4 +372,6 @@ def admin_job(job_id=None):
 if __name__ == "__main__":
     print(f"Loaded {len(pool)} VM(s) from {POOL_FILE}")
     threading.Thread(target=watch_pool_file, daemon=True).start()
+    if REAP_INTERVAL_SECONDS > 0:
+        threading.Thread(target=reap_expired_vms, daemon=True).start()
     app.run(host="0.0.0.0", port=5000)
