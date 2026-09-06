@@ -18,20 +18,18 @@
 		</div>
 
 		<script>
-			const OS_LABELS = { windows: "Claim Windows", linux: "Claim Linux" };
-
 			// 1. Check for existing session on page load
 			let existingUrl = localStorage.getItem("assigned_vm_url");
 			const buttonsContainer = document.getElementById("claim-buttons");
 			const status = document.getElementById("status-message");
 
-			function renderButtons(labels) {
+			function renderButtons(pools) {
 				buttonsContainer.innerHTML = "";
-				for (const label of labels) {
+				for (const pool of pools) {
 					const btn = document.createElement("button");
 					btn.className = "claim-btn";
-					btn.innerText = label.text;
-					btn.onclick = () => handleTerminalAccess(label.os, btn);
+					btn.innerText = pool.text;
+					btn.onclick = () => handleTerminalAccess(pool.name, btn);
 					buttonsContainer.appendChild(btn);
 				}
 			}
@@ -44,24 +42,26 @@
 
 			async function init() {
 				if (existingUrl) {
-					renderButtons([{ text: "Reconnect", os: null }]);
+					renderButtons([{ text: "Reconnect", name: null }]);
 					status.innerText = "You already have an assigned machine.";
 					setButtonsDisabled(true);
 					await checkExistingVm();
 					return;
 				}
 
-				// Only offer an OS choice when more than one type is actually available.
 				try {
 					const response = await fetch("/api/types");
 					const data = await response.json();
-					if (data.types && data.types.length > 1) {
-						renderButtons(data.types.map((os) => ({ text: OS_LABELS[os] || `Claim ${os}`, os })));
+					const pools = data.pools || [];
+					if (pools.length > 1) {
+						renderButtons(pools.map((p) => ({ text: `Claim ${p.name} (${p.available})`, name: p.name })));
+					} else if (pools.length === 1) {
+						renderButtons([{ text: "Claim", name: pools[0].name }]);
 					} else {
-						renderButtons([{ text: "Claim", os: data.types ? data.types[0] : null }]);
+						renderButtons([{ text: "Claim", name: null }]);
 					}
 				} catch (error) {
-					renderButtons([{ text: "Claim", os: null }]);
+					renderButtons([{ text: "Claim", name: null }]);
 				}
 			}
 
@@ -80,7 +80,7 @@
 						if (data.url) {
 							localStorage.setItem("assigned_vm_url", data.url);
 							existingUrl = data.url;
-							renderButtons([{ text: "Reconnect", os: null }]);
+							renderButtons([{ text: "Reconnect", name: null }]);
 							status.innerText = "Your previous machine expired. A new machine has been assigned.";
 						} else {
 							localStorage.removeItem("assigned_vm_url");
@@ -99,7 +99,7 @@
 				}
 			}
 
-			async function handleTerminalAccess(os, btn) {
+			async function handleTerminalAccess(poolName, btn) {
 				// 3. If they already have a VM, mint a fresh session, then redirect
 				if (existingUrl) {
 					setButtonsDisabled(true);
@@ -140,7 +140,7 @@
 					const response = await fetch("/api/claim", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify(os ? { os } : {})
+						body: JSON.stringify(poolName ? { pool: poolName } : {})
 					});
 					const data = await response.json();
 

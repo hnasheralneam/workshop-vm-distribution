@@ -22,6 +22,9 @@
             <label for="vm_duration_hours">VM duration (hours)</label>
             <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="0.5" value="2">
 
+            <label for="pool_name">Pool name</label>
+            <input id="pool_name" name="pool_name" type="text" placeholder="(optional — defaults to OS label)">
+
             <fieldset>
                <legend>Template</legend>
                <label for="template_vm_access_method">Access method</label>
@@ -44,6 +47,11 @@
       </div>
 
       <div class="card">
+         <h2>Redeploy</h2>
+         <div id="redeploy-rows"></div>
+      </div>
+
+      <div class="card">
          <h2>Destroy VMs</h2>
          <div class="row">
             <button class="danger" id="destroy-all-btn">Destroy All</button>
@@ -56,6 +64,7 @@
                <tr>
                   <th></th>
                   <th>VMID</th>
+                  <th>Pool</th>
                   <th>Student</th>
                   <th>Status</th>
                   <th>Expires</th>
@@ -82,6 +91,7 @@
    const destroySelectedBtn = document.getElementById("destroy-selected-btn");
    const refreshPoolBtn = document.getElementById("refresh-pool-btn");
    const poolRows = document.getElementById("pool-rows");
+   const redeployRows = document.getElementById("redeploy-rows");
    const jobStatus = document.getElementById("job-status");
    const jobLog = document.getElementById("job-log");
 
@@ -118,6 +128,7 @@
          tr.innerHTML = `
 									<td><input type="checkbox" class="vm-checkbox" value="${entry.vmid}"></td>
 									<td>${entry.vmid}</td>
+									<td>${entry.pool ?? ""}</td>
 									<td>${entry.student_id ?? ""}</td>
 									<td><span class="status-pill status-${statusLabel}">${statusLabel}</span></td>
 									<td>${expiresLabel}</td>
@@ -131,6 +142,38 @@
       destroyAllBtn.disabled = busy;
       destroyExpiredBtn.disabled = busy;
       destroySelectedBtn.disabled = busy;
+      for (const btn of redeployRows.querySelectorAll("button")) {
+         btn.disabled = busy;
+      }
+   }
+
+   async function loadPools() {
+      const res = await fetch("/api/admin/pools");
+      if (!res.ok) return;
+      const pools = await res.json();
+      redeployRows.innerHTML = "";
+      if (pools.length === 0) {
+         redeployRows.textContent = "No pools yet. Provision VMs first.";
+         return;
+      }
+      for (const pool of pools) {
+         const row = document.createElement("div");
+         row.className = "row";
+         const label = document.createElement("span");
+         label.textContent = `${pool.name} (${pool.available} available)`;
+         const input = document.createElement("input");
+         input.type = "number";
+         input.min = "1";
+         input.value = pool.count;
+         const btn = document.createElement("button");
+         btn.textContent = "Deploy";
+         btn.addEventListener("click", () => {
+            if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
+            startJob("/api/admin/redeploy", { name: pool.name, count: parseInt(input.value, 10) });
+         });
+         row.append(label, input, btn);
+         redeployRows.appendChild(row);
+      }
    }
 
    async function pollJob(jobId) {
@@ -146,6 +189,7 @@
             clearInterval(pollHandle);
             setBusy(false);
             loadPool();
+            loadPools();
          }
       }, 1500);
    }
@@ -212,6 +256,7 @@
 
    loadDefaults();
    loadPool();
+   loadPools();
 </script>
 
 </html>

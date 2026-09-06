@@ -23,6 +23,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent
 POOL_FILE = BASE_DIR / "pool.json"
+CONFIGS_FILE = BASE_DIR / "configs.json"
 POOL_POLL_INTERVAL_SECONDS = 5
 REAP_INTERVAL_SECONDS = int(os.getenv("REAP_INTERVAL_SECONDS", "60"))
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
@@ -78,6 +79,40 @@ def is_available(entry):
 def os_type(entry):
     """rdp is always Windows; ssh/vnc (and legacy entries with no access_method) are Linux."""
     return "windows" if entry.get("access_method") == "rdp" else "linux"
+
+
+def display_name(entry):
+    return entry.get("pool") or ("Windows" if entry.get("access_method") == "rdp" else "Linux")
+
+
+def load_configs():
+    if not CONFIGS_FILE.exists():
+        return {}
+    with open(CONFIGS_FILE, "r") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def save_configs(configs):
+    tmp = CONFIGS_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            json.dump(configs, f, indent=2)
+            f.flush()
+            os.fchmod(f.fileno(), 0o600)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    os.replace(str(tmp), str(CONFIGS_FILE))
+
+
+def config_pool_name(config):
+    return config.get("pool_name") or ("Windows" if config.get("template_vm_access_method") == "rdp" else "Linux")
 
 
 def watch_pool_file():
@@ -141,18 +176,27 @@ def images(filename):
 @app.route("/api/types")
 def types():
     with lock:
-        available_types = sorted({os_type(entry) for entry in pool if is_available(entry)})
-        return jsonify(types=available_types)
+        pools = {}
+        for entry in pool:
+            if not is_available(entry):
+                continue
+            name = display_name(entry)
+            group = pools.setdefault(name, {"name": name, "os": os_type(entry), "available": 0})
+            group["available"] += 1
+        return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]))
 
 
 @app.route("/api/claim", methods=["POST"])
 @limiter.limit("10/minute")
 def claim():
     body = request.get_json(silent=True) or {}
+    requested_pool = body.get("pool")
     requested_os = body.get("os")
     with lock:
         available = [entry for entry in pool if is_available(entry)]
-        if requested_os:
+        if requested_pool:
+            available = [entry for entry in available if display_name(entry) == requested_pool]
+        elif requested_os:
             available = [entry for entry in available if os_type(entry) == requested_os]
         if not available:
             return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
@@ -181,7 +225,9 @@ def validate():
 
         if is_expired(entry):
             entry["claimed"] = False
-            available = [e for e in pool if is_available(e) and os_type(e) == os_type(entry)]
+            available = [e for e in pool if is_available(e) and display_name(e) == display_name(entry)]
+            if not available:
+                available = [e for e in pool if is_available(e) and os_type(e) == os_type(entry)]
             if not available:
                 save_pool()
                 return jsonify(valid=False, expired=True, expires_at=entry.get("expires_at"))
@@ -309,6 +355,7 @@ def admin_pool():
             entries.append({
                 "vmid": entry.get("vmid"),
                 "student_id": entry.get("student_id"),
+                "pool": display_name(entry),
                 "url": entry.get("url"),
                 "claimed": entry.get("claimed"),
                 "expired": is_expired(entry),
@@ -333,6 +380,53 @@ def admin_provision():
     except (ValueError, TypeError):
         return jsonify(detail="vm_count must be an integer."), 400
 
+    configs = load_configs()
+    configs[config_pool_name(config)] = config
+    save_configs(configs)
+
+    job = start_job("provision", provision.run_parallel_provisioning, config, count)
+    if job is None:
+        return jsonify(detail="A job is already running."), 409
+    return jsonify(job_id=job["id"])
+
+
+@app.route("/api/admin/pools")
+@admin_required
+def admin_pools():
+    configs = load_configs()
+    with lock:
+        available = {}
+        for entry in pool:
+            if is_available(entry):
+                name = display_name(entry)
+                available[name] = available.get(name, 0) + 1
+    pools = [
+        {"name": name, "available": available.get(name, 0), "count": cfg.get("vm_count", 5)}
+        for name, cfg in sorted(configs.items())
+    ]
+    return jsonify(pools)
+
+
+@app.route("/api/admin/redeploy", methods=["POST"])
+@admin_required
+def admin_redeploy():
+    body = request.get_json(silent=True) or {}
+    name = body.get("name")
+    configs = load_configs()
+    config = configs.get(name)
+    if config is None:
+        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+
+    count = body.get("count")
+    try:
+        count = int(count) if count not in (None, "") else config["vm_count"]
+    except (ValueError, TypeError):
+        return jsonify(detail="count must be an integer."), 400
+    if count < 1:
+        return jsonify(detail="count must be at least 1."), 400
+
+    config["vm_count"] = count
+    save_configs(configs)
     job = start_job("provision", provision.run_parallel_provisioning, config, count)
     if job is None:
         return jsonify(detail="A job is already running."), 409

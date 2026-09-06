@@ -52,6 +52,7 @@ def default_config():
         "guac_link_ttl_seconds": os.getenv("GUAC_LINK_TTL_SECONDS", 7200),
         "url_output_file": url_output_file,
         "vm_count": os.getenv("VM_COUNT", 5),
+        "pool_name": os.getenv("POOL_NAME", ""),
     }
 
 
@@ -287,7 +288,8 @@ def run_parallel_provisioning(config, count=None, log=print):
 
             access_method = config["template_vm_access_method"]
             new_entries = [
-                {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e, "access_method": access_method}
+                {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e,
+                 "access_method": access_method, "pool": config["pool_name"]}
                 for v, s, u, e in results
             ]
             full_pool = existing_pool + new_entries
