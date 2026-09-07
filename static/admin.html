@@ -14,40 +14,10 @@
 
    <div class="grid">
       <div class="card">
-         <h2>Provision VMs</h2>
-         <form id="provision-form">
-            <label for="vm_count">VM count</label>
-            <input id="vm_count" name="vm_count" type="number" min="1" value="5">
-
-            <label for="vm_duration_hours">VM duration (hours)</label>
-            <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="0.5" value="2">
-
-            <label for="pool_name">Pool name</label>
-            <input id="pool_name" name="pool_name" type="text" placeholder="(optional — defaults to OS label)">
-
-            <fieldset>
-               <legend>Template</legend>
-               <label for="template_vm_access_method">Access method</label>
-               <select id="template_vm_access_method" name="template_vm_access_method">
-                  <option value="ssh">SSH (Linux)</option>
-                  <option value="vnc">VNC (Linux desktop)</option>
-                  <option value="rdp">RDP (Windows)</option>
-               </select>
-               <label for="template_vm_id">Template VM ID</label>
-               <input id="template_vm_id" name="template_vm_id" type="number">
-               <label for="template_vm_username">Template username</label>
-               <input id="template_vm_username" name="template_vm_username" type="text">
-               <label for="template_vm_password">Template password</label>
-               <input id="template_vm_password" name="template_vm_password" type="password"
-                  placeholder="(leave blank to use .env)">
-            </fieldset>
-
-            <button type="submit" id="provision-btn">Provision</button>
-         </form>
-      </div>
-
-      <div class="card">
-         <h2>Redeploy</h2>
+         <div class="card-header">
+            <h2>Pools</h2>
+            <button type="button" id="new-deploy-btn">New deployment</button>
+         </div>
          <div id="redeploy-rows"></div>
       </div>
 
@@ -81,6 +51,41 @@
       <div id="job-log"></div>
    </div>
 
+   <dialog id="deploy-dialog">
+      <h2 id="deploy-title">New deployment</h2>
+      <form id="provision-form">
+         <label for="pool_name">Pool name</label>
+         <input id="pool_name" name="pool_name" type="text" placeholder="(optional — defaults to OS label)">
+
+         <label for="vm_count">VM count</label>
+         <input id="vm_count" name="vm_count" type="number" min="1" value="5">
+
+         <label for="vm_duration_hours">VM duration (hours)</label>
+         <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="0.5" value="2">
+
+         <fieldset>
+            <legend>Template</legend>
+            <label for="template_vm_access_method">Access method</label>
+            <select id="template_vm_access_method" name="template_vm_access_method">
+               <option value="ssh">SSH (Linux)</option>
+               <option value="vnc">VNC (Linux desktop)</option>
+               <option value="rdp">RDP (Windows)</option>
+            </select>
+            <label for="template_vm_id">Template VM ID</label>
+            <input id="template_vm_id" name="template_vm_id" type="number">
+            <label for="template_vm_username">Template username</label>
+            <input id="template_vm_username" name="template_vm_username" type="text">
+            <label for="template_vm_password">Template password</label>
+            <input id="template_vm_password" name="template_vm_password" type="password"
+               placeholder="(leave blank to use .env)">
+         </fieldset>
+
+         <div class="modal-actions">
+            <button type="button" class="secondary" id="deploy-cancel-btn">Cancel</button>
+            <button type="submit" id="provision-btn">Provision</button>
+         </div>
+      </form>
+   </dialog>
 
 </body>
 <script>
@@ -94,8 +99,13 @@
    const redeployRows = document.getElementById("redeploy-rows");
    const jobStatus = document.getElementById("job-status");
    const jobLog = document.getElementById("job-log");
+   const deployDialog = document.getElementById("deploy-dialog");
+   const deployTitle = document.getElementById("deploy-title");
+   const newDeployBtn = document.getElementById("new-deploy-btn");
+   const deployCancelBtn = document.getElementById("deploy-cancel-btn");
 
    let pollHandle = null;
+   let editingPool = null;
 
    async function loadDefaults() {
       const res = await fetch("/api/admin/defaults");
@@ -138,11 +148,7 @@
    }
 
    function setBusy(busy) {
-      provisionBtn.disabled = busy;
-      destroyAllBtn.disabled = busy;
-      destroyExpiredBtn.disabled = busy;
-      destroySelectedBtn.disabled = busy;
-      for (const btn of redeployRows.querySelectorAll("button")) {
+      for (const btn of document.querySelectorAll("button")) {
          btn.disabled = busy;
       }
    }
@@ -170,7 +176,7 @@
       const pools = await res.json();
       redeployRows.innerHTML = "";
       if (pools.length === 0) {
-         redeployRows.textContent = "No pools yet. Provision VMs first.";
+         redeployRows.textContent = "No pools yet.";
          return;
       }
       for (const pool of pools) {
@@ -195,9 +201,54 @@
             if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
             startJob("/api/admin/redeploy", { name: pool.name, count: parseInt(input.value, 10) });
          });
-         row.append(label, input, copyBtn, btn);
+         const editBtn = document.createElement("button");
+         editBtn.textContent = "Edit";
+         editBtn.addEventListener("click", () => openDeployModal(pool));
+         const deleteBtn = document.createElement("button");
+         deleteBtn.className = "danger";
+         deleteBtn.textContent = "Delete";
+         deleteBtn.addEventListener("click", () => deletePool(pool));
+         row.append(label, input, copyBtn, btn, editBtn, deleteBtn);
          redeployRows.appendChild(row);
       }
+   }
+
+   function openDeployModal(pool) {
+      editingPool = pool;
+      const passwordField = provisionForm.elements.template_vm_password;
+      if (pool) {
+         deployTitle.textContent = `Edit pool: ${pool.name}`;
+         provisionForm.elements.pool_name.value = pool.name;
+         provisionForm.elements.pool_name.disabled = true;
+         provisionForm.elements.vm_count.value = pool.count;
+         provisionForm.elements.vm_duration_hours.value = pool.config.guac_link_ttl_seconds / 3600;
+         provisionForm.elements.template_vm_access_method.value = pool.config.template_vm_access_method;
+         provisionForm.elements.template_vm_id.value = pool.config.template_vm_id;
+         provisionForm.elements.template_vm_username.value = pool.config.template_vm_username ?? "";
+         passwordField.value = "";
+         passwordField.placeholder = "(leave blank to keep saved)";
+         provisionBtn.textContent = "Save";
+      } else {
+         deployTitle.textContent = "New deployment";
+         provisionForm.elements.pool_name.disabled = false;
+         provisionForm.elements.pool_name.value = "";
+         provisionForm.elements.template_vm_username.value = "";
+         provisionForm.elements.template_vm_id.value = "";
+         passwordField.value = "";
+         passwordField.placeholder = "(leave blank to use .env)";
+         provisionBtn.textContent = "Provision";
+         loadDefaults();
+      }
+      deployDialog.showModal();
+   }
+
+   async function deletePool(pool) {
+      const suffix = pool.available > 0
+         ? ` Its ${pool.available} available VM(s) stay claimable — destroy them from the Destroy card.`
+         : "";
+      if (!confirm(`Delete saved config for pool "${pool.name}"?${suffix}`)) return;
+      const res = await fetch(`/api/admin/pools/${encodeURIComponent(pool.name)}`, { method: "DELETE" });
+      if (res.ok) loadPools();
    }
 
    async function pollJob(jobId) {
@@ -236,7 +287,7 @@
       pollJob(data.job_id);
    }
 
-   provisionForm.addEventListener("submit", (e) => {
+   provisionForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const formData = new FormData(provisionForm);
       const body = {};
@@ -253,7 +304,30 @@
          }
       }
 
+      if (editingPool) {
+         const res = await fetch(`/api/admin/pools/${encodeURIComponent(editingPool.name)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+         });
+         if (!res.ok) {
+            const data = await res.json();
+            alert(data.detail || "Failed to update pool.");
+            return;
+         }
+         deployDialog.close();
+         loadPools();
+         return;
+      }
+
+      deployDialog.close();
       startJob("/api/admin/provision", body);
+   });
+
+   newDeployBtn.addEventListener("click", () => openDeployModal(null));
+   deployCancelBtn.addEventListener("click", () => deployDialog.close());
+   deployDialog.addEventListener("click", (e) => {
+      if (e.target === deployDialog) deployDialog.close();
    });
 
    destroyAllBtn.addEventListener("click", () => {

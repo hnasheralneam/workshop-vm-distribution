@@ -434,10 +434,46 @@ def admin_pools():
                 name = display_name(entry)
                 available[name] = available.get(name, 0) + 1
     pools = [
-        {"name": name, "available": available.get(name, 0), "count": cfg.get("vm_count", 5)}
+        {
+            "name": name,
+            "available": available.get(name, 0),
+            "count": cfg.get("vm_count", 5),
+            "config": {k: v for k, v in cfg.items() if k not in provision.SECRET_FIELDS},
+        }
         for name, cfg in sorted(configs.items())
     ]
     return jsonify(pools)
+
+
+@app.route("/api/admin/pools/<path:name>", methods=["PUT"])
+@admin_required
+def admin_update_pool(name):
+    body = request.get_json(silent=True) or {}
+    configs = load_configs()
+    saved = configs.get(name)
+    if saved is None:
+        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+
+    overrides = {k: v for k, v in body.items() if k != "pool_name" and v not in (None, "")}
+    try:
+        config = provision.build_config({**saved, **overrides})
+    except (ValueError, TypeError) as exc:
+        return jsonify(detail=f"Invalid configuration: {exc}"), 400
+
+    configs[name] = config
+    save_configs(configs)
+    return jsonify({k: v for k, v in config.items() if k not in provision.SECRET_FIELDS})
+
+
+@app.route("/api/admin/pools/<path:name>", methods=["DELETE"])
+@admin_required
+def admin_delete_pool(name):
+    configs = load_configs()
+    if name not in configs:
+        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+    del configs[name]
+    save_configs(configs)
+    return jsonify(deleted=name)
 
 
 @app.route("/api/admin/redeploy", methods=["POST"])
