@@ -17,23 +17,16 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import padding as crypto_padding
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
-
 load_dotenv()
 
-# Fields that must be cast to int once overrides are merged in.
 INT_FIELDS = {"template_vm_id", "guac_link_ttl_seconds", "vm_count"}
 
-# Fields considered sensitive; never echoed back to a UI.
 SECRET_FIELDS = {"proxmox_token_secret", "template_vm_password", "guacamole_key"}
 
 VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 
 def default_config():
-    """Config derived from the environment. Used by the CLI and as a base for overrides."""
     url_output_file = os.getenv("URL_OUTPUT_FILE", "pool.json")
     if not os.path.isabs(url_output_file):
         url_output_file = str(Path(__file__).parent / url_output_file)
@@ -58,7 +51,6 @@ def default_config():
 
 
 def build_config(overrides=None):
-    """Merge overrides on top of the env defaults and normalize derived fields."""
     config = default_config()
     if overrides:
         for key, value in overrides.items():
@@ -106,7 +98,6 @@ def get_port(access_method):
 
 
 def generate_guac_url(config, target_ip, student_id):
-    """Encrypts the payload and fetches the Guacamole token URL."""
     secret_key = bytes.fromhex(config["guacamole_key"])
     expires_at = time.time() + config["guac_link_ttl_seconds"]
     access_method = config["template_vm_access_method"]
@@ -134,6 +125,7 @@ def generate_guac_url(config, target_ip, student_id):
     signature = hmac.new(secret_key, json_data.encode('utf-8'), hashlib.sha256).digest()
     signed_data = signature + json_data.encode('utf-8')
 
+    # zero IV is what Guacamole's client-encryption spec mandates
     iv = b'\x00' * 16
     cipher = Cipher(algorithms.AES(secret_key), modes.CBC(iv), backend=default_backend())
     encryptor = cipher.encryptor()
@@ -156,7 +148,6 @@ def generate_guac_url(config, target_ip, student_id):
 
 
 def get_vm_ip(proxmox, config, vmid, timeout=120):
-    """Polls the guest-agent until a VALID, routable IPv4 address is found."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -192,7 +183,6 @@ def wait_for_port(ip, port):
 
 
 def provision_worker(proxmox, config, vmid, student_id, log):
-    """The task that each thread will execute independently."""
     node = proxmox.nodes(config["proxmox_node"])
     access_method = config["template_vm_access_method"]
 
@@ -254,7 +244,6 @@ def run_parallel_provisioning(config, count=None, log=print):
     proxmox = get_proxmox_client(config)
     count = count if count is not None else config["vm_count"]
 
-    # 1. Pre-allocate all VMIDs safely on the main thread, skipping any IDs already in use
     log(f"\n--- Pre-allocating {count} VMIDs ---")
     used_vmids = {vm["vmid"] for vm in proxmox.nodes(config["proxmox_node"]).qemu.get()}
     tasks = []
@@ -271,20 +260,16 @@ def run_parallel_provisioning(config, count=None, log=print):
         tasks.append((target_vmid, student_id))
         log(f"Allocated {target_vmid} to {student_id}")
 
-    # 2. Fire off all the clones at the exact same time
     log(f"\n--- Firing off Proxmox Clones in Parallel ---")
     results = []
 
-    # max_workers dictates how many VMs build at once.
-    # Keep it under 20 so you don't DDoS your own Proxmox API.
+    # keep max_workers low or parallel clones hammer the Proxmox API
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        # Submit tasks to the pool
         futures = {
             executor.submit(provision_worker, proxmox, config, vmid, sid, log): sid
             for vmid, sid in tasks
         }
 
-        # Gather results as they finish
         for future in concurrent.futures.as_completed(futures):
             try:
                 vmid, student_id, url, expires_at = future.result()
@@ -293,10 +278,8 @@ def run_parallel_provisioning(config, count=None, log=print):
             except Exception as exc:
                 log(f"❌ VM creation failed: {exc}")
 
-    # 3. Print the final list cleanly
     if results:
         log("\n=== ALL WORKSHOP VMS PROVISIONED ===")
-        # Sort them so student-1 is at the top
         results.sort(key=lambda x: int(x[1].split('-')[1]))
         for _, student, url, _ in results:
             log(f"{student}) {url}")
@@ -323,28 +306,12 @@ if __name__ == "__main__":
     print(f"=== Creating {cli_config['vm_count']} workshop VMs ===")
     run_parallel_provisioning(cli_config)
 
-# ==========================================
-# Fresh session minting (reconnect support)
-# ==========================================
-
 RECONNECT_IP_TIMEOUT = 30
 
 
 def mint_session_url(entry, log=print):
-    """Mint a brand-new Guacamole session URL for an existing pool entry.
-
-    Looks up the VM's CURRENT IP via the guest agent (DHCP may have changed
-    since provisioning) and POSTs a fresh encrypted payload to /api/tokens.
-    Raises RuntimeError if the VM is gone, stopped, or unreachable.
-
-    Reuses the access method + credentials this specific VM was actually
-    provisioned with (stored on the entry by run_parallel_provisioning),
-    layered on the base .env for the Proxmox/Guacamole connection details
-    that are the same for every VM regardless of template. Older pool
-    entries from before these fields existed fall back to the .env
-    defaults, same as before -- build_config()'s override merge already
-    skips None/empty values.
-    """
+    """Mint a fresh session URL for an existing entry, using its current IP and
+    its stored access credentials (legacy entries fall back to .env defaults)."""
     config = build_config({
         "template_vm_access_method": entry.get("access_method"),
         "template_vm_username": entry.get("template_vm_username"),

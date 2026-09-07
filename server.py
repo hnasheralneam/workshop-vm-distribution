@@ -35,7 +35,7 @@ limiter = Limiter(app=app, key_func=get_remote_address, default_limits=[])
 lock = threading.Lock()
 
 job_lock = threading.Lock()
-current_job = None  # {"id", "kind", "status", "log": [...], "started_at", "finished_at"}
+current_job = None  # keys: id, kind, status, log, started_at, finished_at, error
 
 
 def load_pool():
@@ -78,7 +78,7 @@ def is_available(entry):
 
 
 def os_type(entry):
-    """rdp is always Windows; ssh/vnc (and legacy entries with no access_method) are Linux."""
+    """rdp is Windows; ssh/vnc/unset is Linux."""
     return "windows" if entry.get("access_method") == "rdp" else "linux"
 
 
@@ -128,7 +128,6 @@ def gated_pools():
 
 
 def watch_pool_file():
-    """Background thread: picks up VMs added/removed on disk by the provisioner/destroyer."""
     global pool, pool_mtime
     while True:
         time.sleep(POOL_POLL_INTERVAL_SECONDS)
@@ -145,11 +144,7 @@ def watch_pool_file():
 
 
 def reap_expired_vms():
-    """Background thread: destroys VMs on Proxmox once their expires_at time limit passes.
-
-    Delegates to destroy.run_teardown(mode="expired"), which stops/destroys the VMs
-    and prunes them from pool.json; watch_pool_file then reloads the pruned pool.
-    """
+    """Destroys expired VMs; run_teardown also prunes them from pool.json."""
     while True:
         time.sleep(REAP_INTERVAL_SECONDS)
         try:
@@ -270,12 +265,7 @@ def validate():
 @app.route("/api/reconnect", methods=["POST"])
 @limiter.limit("10/minute")
 def reconnect():
-    """Mint a FRESH Guacamole session for a previously assigned workshop VM.
-
-    Stored ?token= URLs are Guacamole session tokens (~60min idle timeout),
-    so replaying them later lands on the login page. Re-minting at click time
-    (with the VM's current IP) keeps Reconnect working for the pool lifetime.
-    """
+    """Stored ?token= URLs idle out (~60min), so re-mint a fresh session with the VM's current IP."""
     body = request.get_json(silent=True) or {}
     url = body.get("url", "")
     with lock:

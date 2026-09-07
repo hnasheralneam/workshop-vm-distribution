@@ -35,7 +35,6 @@
 		</dialog>
 
 		<script>
-			// 1. Check for existing session on page load
 			let existingUrl = localStorage.getItem("assigned_vm_url");
 			const buttonsContainer = document.getElementById("claim-buttons");
 			const status = document.getElementById("status-message");
@@ -113,8 +112,6 @@
 				}
 			}
 
-			// 2. Confirm the stored VM is still claimed for us before trusting it;
-			// it may have been deleted/recreated by the instructor in the meantime.
 			async function checkExistingVm() {
 				try {
 					const response = await fetch("/api/validate", {
@@ -146,7 +143,6 @@
 			}
 
 			async function handleTerminalAccess(poolName, btn) {
-				// 3. If they already have a VM, mint a fresh session, then redirect
 				if (existingUrl) {
 					setButtonsDisabled(true);
 					status.innerText = "Reconnecting...";
@@ -178,7 +174,6 @@
 					return;
 				}
 
-				// 4. Otherwise, pull a new VM from the backend queue
 				setButtonsDisabled(true);
 				status.innerText = "Assigning your machine...";
 
@@ -191,11 +186,9 @@
 					const data = await response.json();
 
 					if (response.ok) {
-						// Save the exact URL so they can reload/return later
 						localStorage.setItem("assigned_vm_url", data.url);
 						status.innerText = "VM claimed! Redirecting...";
 
-						// Direct redirect instead of popup
 						window.location.href = data.url;
 					} else {
 						status.innerText = data.detail;

@@ -7,12 +7,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from proxmoxer import ProxmoxAPI
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
 load_dotenv()
 
-# The critical safety net: Only VMs starting with this prefix will be touched
+# Safety net: only VMs with this name prefix are ever touched
 WORKSHOP_PREFIX = "workshop-"
 
 VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
@@ -66,19 +63,16 @@ def get_proxmox_client(config):
 
 
 def destroy_worker(proxmox, node_name, vmid, vm_name, log):
-    """Worker task to safely stop and destroy a single VM. Raises on failure."""
     node = proxmox.nodes(node_name)
 
     try:
-        # 1. Check current status
         current_status = node.qemu(vmid).status.current.get()
 
-        # 2. Stop the VM if it is running (Proxmox will not delete a running VM)
+        # Proxmox won't delete a running VM
         if current_status.get("status") == "running":
             log(f"[{vmid}] 🛑 Stopping {vm_name}...")
             node.qemu(vmid).status.stop.post()
 
-            # Poll until the VM is actually stopped
             deadline = time.time() + 120
             while time.time() < deadline:
                 time.sleep(2)
@@ -88,7 +82,6 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
             else:
                 raise TimeoutError(f"VM {vmid} did not stop within 120 seconds")
 
-        # 3. Destroy the VM
         log(f"[{vmid}] 💥 Destroying {vm_name}...")
         node.qemu(vmid).delete()
         return f"✅ Successfully destroyed {vm_name} ({vmid})"
@@ -109,16 +102,13 @@ def load_pool(pool_output_file):
 
 
 def run_teardown(config, mode="all", vmids=None, log=print):
-    """mode: 'all', 'expired', or 'specific' (requires vmids, a collection of ints)."""
+    """mode: 'all', 'expired', or 'specific' (vmids required for 'specific')."""
     proxmox = get_proxmox_client(config)
     pool_output_file = config["url_output_file"]
 
     log(f"\n--- Scanning for VMs with prefix '{WORKSHOP_PREFIX}' ---")
 
-    # Fetch all VMs on the node
     all_vms = proxmox.nodes(config["proxmox_node"]).qemu.get()
-
-    # Filter for workshop VMs - the critical safety net
     target_vms = [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX)]
 
     pool = load_pool(pool_output_file)
@@ -130,7 +120,7 @@ def run_teardown(config, mode="all", vmids=None, log=print):
         now = time.time()
         expired_vmids = {entry['vmid'] for entry in pool if entry.get('expires_at') is not None and entry['expires_at'] < now}
         target_vms = [vm for vm in target_vms if vm.get('vmid') in expired_vmids]
-    else:  # all
+    else:
         pass
 
     if not target_vms:
@@ -139,7 +129,6 @@ def run_teardown(config, mode="all", vmids=None, log=print):
 
     log(f"Found {len(target_vms)} workshop VMs to destroy.")
 
-    # Execute the destruction in parallel
     results = []
     destroyed_vmids = set()
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
