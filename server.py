@@ -163,6 +163,11 @@ def index():
     return send_from_directory(BASE_DIR / "static", "index.html")
 
 
+@app.route("/claim/<path:label>")
+def claim_link(label):
+    return send_from_directory(BASE_DIR / "static", "index.html")
+
+
 @app.route("/style.css")
 def style():
     return send_from_directory(BASE_DIR / "static", "style.css")
@@ -269,6 +274,34 @@ def reconnect():
         entry["url"] = fresh
         save_pool()
         return jsonify(valid=True, url=fresh)
+
+
+@app.route("/api/release", methods=["POST"])
+@limiter.limit("10/minute")
+def release():
+    body = request.get_json(silent=True) or {}
+    url = body.get("url", "")
+    with lock:
+        entry = next((e for e in pool if e.get("url") == url and e.get("claimed")), None)
+        if entry is None:
+            return jsonify(detail="No assigned machine found."), 404
+        pool.remove(entry)
+        save_pool()
+
+    def destroy_released():
+        try:
+            config = destroy.build_config()
+            proxmox = destroy.get_proxmox_client(config)
+            destroy.destroy_worker(proxmox, config["proxmox_node"], entry["vmid"], f"workshop-{entry.get('student_id')}", print)
+        except Exception as exc:
+            entry["expires_at"] = time.time()
+            with lock:
+                pool.append(entry)
+                save_pool()
+            print(f"Release: destroying VM {entry['vmid']} failed, marked expired for reaper retry: {exc}")
+
+    threading.Thread(target=destroy_released, daemon=True).start()
+    return jsonify(released=True)
 
 
 def reload_pool():

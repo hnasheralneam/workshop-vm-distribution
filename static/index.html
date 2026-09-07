@@ -4,7 +4,7 @@
 		<meta charset="UTF-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
 		<title>DawgSec Workshop VM Distribution</title>
-		<link rel="stylesheet" href="style.css">
+		<link rel="stylesheet" href="/style.css">
 	</head>
 	<body class="portal">
 		<div class="portal-container card">
@@ -22,6 +22,17 @@
 			let existingUrl = localStorage.getItem("assigned_vm_url");
 			const buttonsContainer = document.getElementById("claim-buttons");
 			const status = document.getElementById("status-message");
+
+			function claimLabelFromPath() {
+				const match = location.pathname.match(/^\/claim\/(.+)$/);
+				if (!match) return null;
+				try {
+					return decodeURIComponent(match[1]);
+				} catch (error) {
+					return match[1];
+				}
+			}
+			const claimLabel = claimLabelFromPath();
 
 			function renderButtons(pools) {
 				buttonsContainer.innerHTML = "";
@@ -46,6 +57,15 @@
 					status.innerText = "You already have an assigned machine.";
 					setButtonsDisabled(true);
 					await checkExistingVm();
+				}
+				if (existingUrl) {
+					if (claimLabel) await handlePoolSwitch(claimLabel);
+					return;
+				}
+
+				if (claimLabel) {
+					renderButtons([{ text: `Claim ${claimLabel}`, name: claimLabel }]);
+					handleTerminalAccess(claimLabel);
 					return;
 				}
 
@@ -76,22 +96,20 @@
 					});
 					const data = await response.json();
 
-					if (!data.valid) {
-						if (data.url) {
-							localStorage.setItem("assigned_vm_url", data.url);
-							existingUrl = data.url;
-							renderButtons([{ text: "Reconnect", name: null }]);
-							status.innerText = "Your previous machine expired. A new machine has been assigned.";
-						} else {
-							localStorage.removeItem("assigned_vm_url");
-							existingUrl = null;
-							status.innerText = data.expired
-								? "Your previous machine expired and no new machines are available. Please contact your instructor."
-								: "Your previous machine is no longer available. Claim a new one below.";
-							await init();
-							return;
+						if (!data.valid) {
+							if (data.url) {
+								localStorage.setItem("assigned_vm_url", data.url);
+								existingUrl = data.url;
+								renderButtons([{ text: "Reconnect", name: null }]);
+								status.innerText = "Your previous machine expired. A new machine has been assigned.";
+							} else {
+								localStorage.removeItem("assigned_vm_url");
+								existingUrl = null;
+								status.innerText = data.expired
+									? "Your previous machine expired and no new machines are available. Please contact your instructor."
+									: "Your previous machine is no longer available. Claim a new one below.";
+							}
 						}
-					}
 				} catch (error) {
 					status.innerText = "Network error checking your machine. Please try again.";
 				} finally {
@@ -155,6 +173,46 @@
 						status.innerText = data.detail;
 						setButtonsDisabled(false);
 					}
+				} catch (error) {
+					status.innerText = "Network error. Please try again.";
+					setButtonsDisabled(false);
+				}
+			}
+
+			async function handlePoolSwitch(label) {
+				if (!confirm(`Claiming a machine from pool "${label}" will immediately and permanently delete your current machine. Continue?`)) {
+					setButtonsDisabled(false);
+					return;
+				}
+				setButtonsDisabled(true);
+				status.innerText = "Assigning your machine...";
+
+				try {
+					const response = await fetch("/api/claim", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ pool: label })
+					});
+					const data = await response.json();
+					if (!response.ok) {
+						status.innerText = data.detail;
+						setButtonsDisabled(false);
+						return;
+					}
+
+					localStorage.setItem("assigned_vm_url", data.url);
+					const oldUrl = existingUrl;
+					existingUrl = data.url;
+					try {
+						await fetch("/api/release", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ url: oldUrl })
+						});
+					} catch (error) {}
+
+					status.innerText = "VM claimed! Redirecting...";
+					window.location.href = data.url;
 				} catch (error) {
 					status.innerText = "Network error. Please try again.";
 					setButtonsDisabled(false);

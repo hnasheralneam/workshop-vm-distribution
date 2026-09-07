@@ -147,6 +147,23 @@
       }
    }
 
+   function copyToClipboard(text) {
+      if (navigator.clipboard) {
+         navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+         return;
+      }
+      fallbackCopy(text);
+   }
+
+   function fallbackCopy(text) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+   }
+
    async function loadPools() {
       const res = await fetch("/api/admin/pools");
       if (!res.ok) return;
@@ -165,13 +182,20 @@
          input.type = "number";
          input.min = "1";
          input.value = pool.count;
+         const copyBtn = document.createElement("button");
+         copyBtn.textContent = "Copy link";
+         copyBtn.addEventListener("click", () => {
+            copyToClipboard(`${location.origin}/claim/${encodeURIComponent(pool.name)}`);
+            copyBtn.textContent = "Copied!";
+            setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
+         });
          const btn = document.createElement("button");
          btn.textContent = "Deploy";
          btn.addEventListener("click", () => {
             if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
             startJob("/api/admin/redeploy", { name: pool.name, count: parseInt(input.value, 10) });
          });
-         row.append(label, input, btn);
+         row.append(label, input, copyBtn, btn);
          redeployRows.appendChild(row);
       }
    }
