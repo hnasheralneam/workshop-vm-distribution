@@ -14,14 +14,41 @@
 			<div id="claim-buttons">
 				<button id="claim-btn" onclick="handleTerminalAccess()">Claim</button>
 			</div>
+			<button id="code-btn" hidden>Enter pool code</button>
 			<p id="status-message"></p>
 		</div>
+
+		<dialog id="code-dialog">
+			<h2>Enter pool code</h2>
+			<form id="code-form">
+				<input id="code-input" type="text" placeholder="e.g. F4LC0N" autocomplete="off" autocapitalize="characters">
+				<p id="code-error"></p>
+				<div class="modal-actions">
+					<button type="button" class="secondary" id="code-cancel-btn">Cancel</button>
+					<button type="submit" id="code-submit-btn">Claim box</button>
+				</div>
+			</form>
+			<div id="code-progress" hidden>
+				<div class="spinner"></div>
+				<p id="code-stage"></p>
+			</div>
+		</dialog>
 
 		<script>
 			// 1. Check for existing session on page load
 			let existingUrl = localStorage.getItem("assigned_vm_url");
 			const buttonsContainer = document.getElementById("claim-buttons");
 			const status = document.getElementById("status-message");
+			const codeBtn = document.getElementById("code-btn");
+			const codeDialog = document.getElementById("code-dialog");
+			const codeForm = document.getElementById("code-form");
+			const codeInput = document.getElementById("code-input");
+			const codeError = document.getElementById("code-error");
+			const codeSubmitBtn = document.getElementById("code-submit-btn");
+			const codeCancelBtn = document.getElementById("code-cancel-btn");
+			const codeProgress = document.getElementById("code-progress");
+			const codeStage = document.getElementById("code-stage");
+			let redeemPoll = null;
 
 			function claimLabelFromPath() {
 				const match = location.pathname.match(/^\/claim\/(.+)$/);
@@ -72,6 +99,7 @@
 				try {
 					const response = await fetch("/api/types");
 					const data = await response.json();
+					codeBtn.hidden = !(data.coded > 0);
 					const pools = data.pools || [];
 					if (pools.length > 1) {
 						renderButtons(pools.map((p) => ({ text: `Claim ${p.name} (${p.available})`, name: p.name })));
@@ -218,6 +246,102 @@
 					setButtonsDisabled(false);
 				}
 			}
+
+			function stageText(stage) {
+				if (stage === "cloning") return "Cloning template...";
+				if (stage === "booting") return "Booting VM...";
+				if (stage === "network") return "Waiting for network...";
+				if (stage === "adding") return "Adding machine to pool...";
+				return "Preparing your machine...";
+			}
+
+			function finishRedeem(url) {
+				if (redeemPoll) clearInterval(redeemPoll);
+				const oldUrl = localStorage.getItem("assigned_vm_url");
+				localStorage.setItem("assigned_vm_url", url);
+				existingUrl = url;
+				if (oldUrl) {
+					fetch("/api/release", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ url: oldUrl })
+					}).catch(() => {});
+				}
+				codeStage.textContent = "Redirecting...";
+				window.location.href = url;
+			}
+
+			function redeemFailed(detail) {
+				if (redeemPoll) clearInterval(redeemPoll);
+				codeProgress.hidden = true;
+				codeForm.hidden = false;
+				codeInput.disabled = false;
+				codeSubmitBtn.disabled = false;
+				codeError.textContent = detail;
+				codeInput.focus();
+			}
+
+			function pollRedeem(ticket) {
+				codeForm.hidden = true;
+				codeProgress.hidden = false;
+				redeemPoll = setInterval(async () => {
+					try {
+						const response = await fetch(`/api/redeem/${ticket}`);
+						const data = await response.json();
+						if (!response.ok) {
+							redeemFailed(data.detail || "Lost track of your machine. Please try again.");
+							return;
+						}
+						if (data.stage) codeStage.textContent = stageText(data.stage);
+						if (data.status === "ready") finishRedeem(data.url);
+						else if (data.status === "error") redeemFailed(data.detail || "Provisioning failed. Please try again.");
+					} catch (error) {}
+				}, 3000);
+			}
+
+			async function redeemCode() {
+				const code = codeInput.value.trim();
+				if (!code) return;
+				codeError.textContent = "";
+				codeInput.disabled = true;
+				codeSubmitBtn.disabled = true;
+				codeForm.hidden = true;
+				codeProgress.hidden = false;
+				codeStage.textContent = "Checking code...";
+				try {
+					const response = await fetch("/api/redeem", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ code })
+					});
+					const data = await response.json();
+					if (response.ok && data.status === "ready") {
+						finishRedeem(data.url);
+					} else if (response.ok && data.status === "provisioning") {
+						pollRedeem(data.ticket);
+					} else {
+						redeemFailed(data.detail || "Unknown code.");
+					}
+				} catch (error) {
+					redeemFailed("Network error. Please try again.");
+				}
+			}
+
+			codeBtn.addEventListener("click", () => {
+				codeForm.hidden = false;
+				codeProgress.hidden = true;
+				codeError.textContent = "";
+				codeInput.value = "";
+				codeInput.disabled = false;
+				codeSubmitBtn.disabled = false;
+				codeDialog.showModal();
+				codeInput.focus();
+			});
+			codeForm.addEventListener("submit", (e) => {
+				e.preventDefault();
+				redeemCode();
+			});
+			codeCancelBtn.addEventListener("click", () => codeDialog.close());
 
 			init();
 

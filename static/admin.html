@@ -57,6 +57,9 @@
          <label for="pool_name">Pool name</label>
          <input id="pool_name" name="pool_name" type="text" placeholder="(optional — defaults to OS label)">
 
+         <label for="pool_code">Pool code</label>
+         <input id="pool_code" name="pool_code" type="text" placeholder="(leave blank to auto-generate)" style="text-transform: uppercase">
+
          <label for="vm_count">VM count</label>
          <input id="vm_count" name="vm_count" type="number" min="1" value="5">
 
@@ -183,7 +186,7 @@
          const row = document.createElement("div");
          row.className = "row";
          const label = document.createElement("span");
-         label.textContent = `${pool.name} (${pool.available} available)`;
+         label.textContent = `${pool.name}${pool.config.pool_code ? ` — code ${pool.config.pool_code}` : ""} (${pool.available} available)`;
          const input = document.createElement("input");
          input.type = "number";
          input.min = "1";
@@ -194,6 +197,19 @@
             copyToClipboard(`${location.origin}/claim/${encodeURIComponent(pool.name)}`);
             copyBtn.textContent = "Copied!";
             setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
+         });
+         const codeBtn = document.createElement("button");
+         codeBtn.className = "secondary";
+         codeBtn.textContent = "Set code";
+         codeBtn.addEventListener("click", async () => {
+            const code = prompt(`Access code for pool "${pool.name}". Leave empty to clear:`, pool.config.pool_code || "");
+            if (code === null) return;
+            const res = await fetch("/api/admin/pool-code", {
+               method: "POST",
+               headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({ pool: pool.name, code })
+            });
+            if (res.ok) loadPools();
          });
          const btn = document.createElement("button");
          btn.textContent = "Deploy";
@@ -208,7 +224,7 @@
          deleteBtn.className = "danger";
          deleteBtn.textContent = "Delete";
          deleteBtn.addEventListener("click", () => deletePool(pool));
-         row.append(label, input, copyBtn, btn, editBtn, deleteBtn);
+         row.append(label, input, copyBtn, codeBtn, btn, editBtn, deleteBtn);
          redeployRows.appendChild(row);
       }
    }
@@ -220,6 +236,7 @@
          deployTitle.textContent = `Edit pool: ${pool.name}`;
          provisionForm.elements.pool_name.value = pool.name;
          provisionForm.elements.pool_name.disabled = true;
+         provisionForm.elements.pool_code.value = pool.config.pool_code ?? "";
          provisionForm.elements.vm_count.value = pool.count;
          provisionForm.elements.vm_duration_hours.value = pool.config.guac_link_ttl_seconds / 3600;
          provisionForm.elements.template_vm_access_method.value = pool.config.template_vm_access_method;
@@ -232,6 +249,7 @@
          deployTitle.textContent = "New deployment";
          provisionForm.elements.pool_name.disabled = false;
          provisionForm.elements.pool_name.value = "";
+         provisionForm.elements.pool_code.value = "";
          provisionForm.elements.template_vm_username.value = "";
          provisionForm.elements.template_vm_id.value = "";
          passwordField.value = "";

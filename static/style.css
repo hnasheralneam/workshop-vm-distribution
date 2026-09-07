@@ -145,6 +145,10 @@ body.admin .card-header button {
 	font-size: 0.8rem;
 }
 
+body.admin #redeploy-rows .row span {
+	flex-basis: 100%;
+}
+
 body.admin #redeploy-rows input[type="number"] {
 	width: 4.5rem;
 }
@@ -278,6 +282,66 @@ body.portal #status-message {
 	color: #9aa0ab;
 }
 
+body.portal #code-btn {
+	width: 100%;
+	margin-top: 0.6rem;
+	padding: 0.6rem 1rem;
+	font-size: 0.85rem;
+	background: #2a2e37;
+	color: #e6e6e6;
+}
+
+body.portal #code-btn:hover:not(:disabled) {
+	background: #343945;
+}
+
+#code-dialog input {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 0.5rem 0.6rem;
+	background: #0f1115;
+	border: 1px solid #2a2e37;
+	border-radius: 6px;
+	color: #e6e6e6;
+	font-size: 1rem;
+	text-transform: uppercase;
+}
+
+#code-error {
+	color: #f87171;
+	font-size: 0.85rem;
+	margin: 0.5rem 0 0;
+	min-height: 1em;
+}
+
+#code-progress {
+	text-align: center;
+}
+
+#code-stage {
+	color: #9aa0ab;
+	font-size: 0.9rem;
+	margin: 0;
+}
+
+.spinner {
+	width: 28px;
+	height: 28px;
+	margin: 1.5rem auto;
+	border: 3px solid #2a2e37;
+	border-top-color: #4ade80;
+	border-radius: 50%;
+	animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+
+dialog button.secondary {
+	background: #2a2e37;
+	color: #e6e6e6;
+}
 
 .job-status {
 	max-width: 900px;

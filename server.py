@@ -3,6 +3,7 @@ import hmac
 import json
 import os
 import random
+import secrets
 import threading
 import time
 import uuid
@@ -115,6 +116,17 @@ def config_pool_name(config):
     return config.get("pool_name") or ("Windows" if config.get("template_vm_access_method") == "rdp" else "Linux")
 
 
+CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+
+
+def generate_pool_code():
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(5))
+
+
+def gated_pools():
+    return {name for name, cfg in load_configs().items() if cfg.get("pool_code")}
+
+
 def watch_pool_file():
     """Background thread: picks up VMs added/removed on disk by the provisioner/destroyer."""
     global pool, pool_mtime
@@ -180,15 +192,16 @@ def images(filename):
 
 @app.route("/api/types")
 def types():
+    gated = gated_pools()
     with lock:
         pools = {}
         for entry in pool:
-            if not is_available(entry):
+            if not is_available(entry) or display_name(entry) in gated:
                 continue
             name = display_name(entry)
             group = pools.setdefault(name, {"name": name, "os": os_type(entry), "available": 0})
             group["available"] += 1
-        return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]))
+        return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated))
 
 
 @app.route("/api/claim", methods=["POST"])
@@ -197,12 +210,15 @@ def claim():
     body = request.get_json(silent=True) or {}
     requested_pool = body.get("pool")
     requested_os = body.get("os")
+    gated = gated_pools()
     with lock:
         available = [entry for entry in pool if is_available(entry)]
         if requested_pool:
             available = [entry for entry in available if display_name(entry) == requested_pool]
-        elif requested_os:
-            available = [entry for entry in available if os_type(entry) == requested_os]
+        else:
+            available = [entry for entry in available if display_name(entry) not in gated]
+            if requested_os:
+                available = [entry for entry in available if os_type(entry) == requested_os]
         if not available:
             return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
 
@@ -232,7 +248,8 @@ def validate():
             entry["claimed"] = False
             available = [e for e in pool if is_available(e) and display_name(e) == display_name(entry)]
             if not available:
-                available = [e for e in pool if is_available(e) and os_type(e) == os_type(entry)]
+                available = [e for e in pool if is_available(e) and os_type(e) == os_type(entry)
+                             and display_name(e) not in gated_pools()]
             if not available:
                 save_pool()
                 return jsonify(valid=False, expired=True, expires_at=entry.get("expires_at"))
@@ -302,6 +319,97 @@ def release():
 
     threading.Thread(target=destroy_released, daemon=True).start()
     return jsonify(released=True)
+
+
+redeem_tickets = {}
+
+
+def find_pool_by_code(code):
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    for config in load_configs().values():
+        stored = (config.get("pool_code") or "").strip().upper()
+        if stored and hmac.compare_digest(stored, code):
+            return config
+    return None
+
+
+def set_ticket(ticket, **fields):
+    with lock:
+        if ticket in redeem_tickets:
+            redeem_tickets[ticket].update(fields)
+
+
+def run_redeem_provision(ticket, config):
+    def log(message):
+        print(message)
+        text = str(message).lower()
+        if "booting" in text:
+            set_ticket(ticket, stage="booting")
+        elif "waiting for ip" in text:
+            set_ticket(ticket, stage="network")
+
+    try:
+        vmid, student_id, url, expires_at = provision.provision_one(
+            config, f"student-{uuid.uuid4().hex[:6]}", log)
+        set_ticket(ticket, stage="adding")
+        entry = {
+            "vmid": vmid,
+            "student_id": student_id,
+            "url": url,
+            "claimed": True,
+            "expires_at": expires_at,
+            "access_method": config["template_vm_access_method"],
+            "pool": config["pool_name"],
+            "template_vm_username": config["template_vm_username"],
+            "template_vm_password": config["template_vm_password"],
+        }
+        provision.append_pool_entries(config["url_output_file"], [entry])
+        reload_pool()
+        set_ticket(ticket, status="ready", url=url)
+    except Exception as exc:
+        set_ticket(ticket, status="error", detail=str(exc))
+
+
+@app.route("/api/redeem", methods=["POST"])
+@limiter.limit("10/minute")
+def redeem():
+    body = request.get_json(silent=True) or {}
+    config = find_pool_by_code(body.get("code"))
+    if config is None:
+        return jsonify(detail="Unknown code."), 404
+
+    pool_name = config_pool_name(config)
+    with lock:
+        available = [entry for entry in pool if is_available(entry) and display_name(entry) == pool_name]
+        if available:
+            entry = random.choice(available)
+            entry["claimed"] = True
+            try:
+                entry["url"] = provision.mint_session_url(entry)
+            except Exception as exc:
+                entry["claimed"] = False
+                save_pool()
+                return jsonify(detail=f"VM is not reachable right now ({exc}). Please try again."), 502
+            save_pool()
+            return jsonify(status="ready", url=entry["url"], pool=pool_name)
+
+    ticket = str(uuid.uuid4())
+    with lock:
+        redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
+    threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
+    return jsonify(status="provisioning", ticket=ticket, pool=pool_name), 202
+
+
+@app.route("/api/redeem/<ticket>", methods=["GET"])
+@limiter.limit("60/minute")
+def redeem_status(ticket):
+    with lock:
+        snapshot = dict(redeem_tickets[ticket]) if ticket in redeem_tickets else None
+    if snapshot is None:
+        return jsonify(detail="Unknown ticket."), 404
+    return jsonify(snapshot)
 
 
 def reload_pool():
@@ -413,6 +521,9 @@ def admin_provision():
     except (ValueError, TypeError):
         return jsonify(detail="vm_count must be an integer."), 400
 
+    if not config.get("pool_code"):
+        config["pool_code"] = generate_pool_code()
+
     configs = load_configs()
     configs[config_pool_name(config)] = config
     save_configs(configs)
@@ -474,6 +585,20 @@ def admin_delete_pool(name):
     del configs[name]
     save_configs(configs)
     return jsonify(deleted=name)
+
+
+@app.route("/api/admin/pool-code", methods=["POST"])
+@admin_required
+def admin_pool_code():
+    body = request.get_json(silent=True) or {}
+    name = body.get("pool")
+    code = (body.get("code") or "").strip().upper()
+    configs = load_configs()
+    if name not in configs:
+        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+    configs[name]["pool_code"] = code
+    save_configs(configs)
+    return jsonify(pool=name, code=code)
 
 
 @app.route("/api/admin/redeploy", methods=["POST"])

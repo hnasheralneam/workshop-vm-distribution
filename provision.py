@@ -53,6 +53,7 @@ def default_config():
         "url_output_file": url_output_file,
         "vm_count": os.getenv("VM_COUNT", 5),
         "pool_name": os.getenv("POOL_NAME", ""),
+        "pool_code": os.getenv("POOL_CODE", ""),
     }
 
 
@@ -225,6 +226,30 @@ def provision_worker(proxmox, config, vmid, student_id, log):
         raise
 
 
+def append_pool_entries(output_file, entries):
+    with open(output_file, "a+") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            content = f.read()
+            full_pool = (json.loads(content) if content else []) + entries
+
+            f.seek(0)
+            f.truncate()
+            json.dump(full_pool, f, indent=2)
+            f.flush()
+            os.fchmod(f.fileno(), 0o600)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    return full_pool
+
+
+def provision_one(config, student_id, log=print):
+    proxmox = get_proxmox_client(config)
+    vmid = int(proxmox.cluster.nextid.get())
+    return provision_worker(proxmox, config, vmid, student_id, log)
+
+
 def run_parallel_provisioning(config, count=None, log=print):
     proxmox = get_proxmox_client(config)
     count = count if count is not None else config["vm_count"]
@@ -279,30 +304,15 @@ def run_parallel_provisioning(config, count=None, log=print):
         log("\n=== NO WORKSHOP VMS WERE PROVISIONED ===")
 
     pool_output_file = config["url_output_file"]
-    with open(pool_output_file, "a+") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            f.seek(0)
-            content = f.read()
-            existing_pool = json.loads(content) if content else []
-
-            access_method = config["template_vm_access_method"]
-            new_entries = [
-                {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e,
-                 "access_method": access_method, "pool": config["pool_name"],
-                 "template_vm_username": config["template_vm_username"],
-                 "template_vm_password": config["template_vm_password"]}
-                for v, s, u, e in results
-            ]
-            full_pool = existing_pool + new_entries
-
-            f.seek(0)
-            f.truncate()
-            json.dump(full_pool, f, indent=2)
-            f.flush()
-            os.fchmod(f.fileno(), 0o600)
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    access_method = config["template_vm_access_method"]
+    new_entries = [
+        {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e,
+         "access_method": access_method, "pool": config["pool_name"],
+         "template_vm_username": config["template_vm_username"],
+         "template_vm_password": config["template_vm_password"]}
+        for v, s, u, e in results
+    ]
+    full_pool = append_pool_entries(pool_output_file, new_entries)
     log(f"\nAdded {len(new_entries)} VMs to pool (now {len(full_pool)} total)")
 
     return new_entries
