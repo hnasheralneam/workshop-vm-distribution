@@ -353,6 +353,7 @@ def run_redeem_provision(ticket, config):
             set_ticket(ticket, stage="network")
 
     try:
+        config = provision.build_config(config)
         vmid, student_id, url, expires_at = provision.provision_one(
             config, f"student-{uuid.uuid4().hex[:6]}", log)
         set_ticket(ticket, stage="adding")
@@ -657,11 +658,16 @@ def admin_redeploy():
             state["done"] = True
         return configs
 
+    config["vm_count"] = count
+    try:
+        config = provision.build_config(config)
+    except (ValueError, TypeError) as exc:
+        return jsonify(detail=f"Invalid configuration: {exc}"), 400
+
     poolstore.update(CONFIGS_FILE, save, dict)
     if not state.get("done"):
         return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
 
-    config["vm_count"] = count
     job = start_job("provision", provision.run_parallel_provisioning, config, count)
     if job is None:
         return jsonify(detail="A job is already running."), 409
@@ -705,4 +711,4 @@ if __name__ == "__main__":
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
