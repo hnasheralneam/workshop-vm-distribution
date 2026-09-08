@@ -21,7 +21,7 @@ Edit `.env` with your Proxmox and Guacamole details:
 - `PROXMOX_URL`, `PROXMOX_USER`, `PROXMOX_TOKEN_NAME`, `PROXMOX_TOKEN_SECRET`, `PROXMOX_NODE`, `VERIFY_SSL`
 - `TEMPLATE_VM_ACCESS_METHOD` (`ssh`, `vnc`, or `rdp`), `TEMPLATE_VM_ID`, `TEMPLATE_VM_USERNAME`, `TEMPLATE_VM_PASSWORD`
 - `GUACAMOLE_URL`, `GUACAMOLE_KEY`, `GUAC_LINK_TTL_SECONDS`, `REAP_INTERVAL_SECONDS`
-- `URL_OUTPUT_FILE`, `VM_COUNT`, `ADMIN_PASSWORD`
+- `URL_OUTPUT_FILE`, `VM_COUNT`, `ADMIN_PASSWORD`, `LOG_FILE`
 
 ## CLI Usage
 1. Provision VMs (writes `pool.json`):
@@ -45,4 +45,4 @@ Edit `.env` with your Proxmox and Guacamole details:
 
 ## Notes
 Make sure you don't have any important vms named workshop-* in your proxmox! `destroy.py` will delete them.
-State lives in `pool.json` (claims + per-VM credentials) and `configs.json` (saved pools); both are gitignored and written with `0600` permissions.
+State lives in `pool.json` (claims + per-VM credentials) and `configs.json` (saved pools); both are gitignored and written with `0600` permissions. Server, provisioning, and teardown output also goes to `server.log` (gitignored, `0600`, rotates at 5 MB with 2 backups; set `LOG_FILE` to change the location) while still printing to the console.

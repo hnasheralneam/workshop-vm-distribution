@@ -7,4 +7,5 @@ __pycache__/
 .env-win
 configs.json
 *.bak-*
-server.log
+*.lock
+server.log*

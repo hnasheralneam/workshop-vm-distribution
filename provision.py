@@ -1,4 +1,3 @@
-import fcntl
 import time
 import json
 import hmac
@@ -10,6 +9,9 @@ import socket
 import requests
 import os
 from pathlib import Path
+
+import applog
+import poolstore
 
 from dotenv import load_dotenv
 from proxmoxer import ProxmoxAPI
@@ -186,13 +188,13 @@ def provision_worker(proxmox, config, vmid, student_id, log):
     node = proxmox.nodes(config["proxmox_node"])
     access_method = config["template_vm_access_method"]
 
-    log(f"[{vmid}] Cloning template...")
-    node.qemu(config["template_vm_id"]).clone.post(newid=vmid, name=f"workshop-{student_id}", full=0)
-
-    log(f"[{vmid}] Booting VM...")
-    node.qemu(vmid).status.start.post()
-
     try:
+        log(f"[{vmid}] Cloning template...")
+        node.qemu(config["template_vm_id"]).clone.post(newid=vmid, name=f"workshop-{student_id}", full=0)
+
+        log(f"[{vmid}] Booting VM...")
+        node.qemu(vmid).status.start.post()
+
         log(f"[{vmid}] Waiting for IP...")
         vm_ip = get_vm_ip(proxmox, config, vmid)
 
@@ -217,30 +219,16 @@ def provision_worker(proxmox, config, vmid, student_id, log):
 
 
 def append_pool_entries(output_file, entries):
-    with open(output_file, "a+") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            f.seek(0)
-            content = f.read()
-            full_pool = (json.loads(content) if content else []) + entries
-
-            f.seek(0)
-            f.truncate()
-            json.dump(full_pool, f, indent=2)
-            f.flush()
-            os.fchmod(f.fileno(), 0o600)
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    return full_pool
+    return poolstore.update(output_file, lambda pool: pool + entries)
 
 
-def provision_one(config, student_id, log=print):
+def provision_one(config, student_id, log=applog.log):
     proxmox = get_proxmox_client(config)
     vmid = int(proxmox.cluster.nextid.get())
     return provision_worker(proxmox, config, vmid, student_id, log)
 
 
-def run_parallel_provisioning(config, count=None, log=print):
+def run_parallel_provisioning(config, count=None, log=applog.log):
     proxmox = get_proxmox_client(config)
     count = count if count is not None else config["vm_count"]
 
@@ -303,13 +291,13 @@ def run_parallel_provisioning(config, count=None, log=print):
 
 if __name__ == "__main__":
     cli_config = build_config()
-    print(f"=== Creating {cli_config['vm_count']} workshop VMs ===")
+    applog.log.info(f"=== Creating {cli_config['vm_count']} workshop VMs ===")
     run_parallel_provisioning(cli_config)
 
 RECONNECT_IP_TIMEOUT = 30
 
 
-def mint_session_url(entry, log=print):
+def mint_session_url(entry, log=applog.log):
     """Mint a fresh session URL for an existing entry, using its current IP and
     its stored access credentials (legacy entries fall back to .env defaults)."""
     config = build_config({

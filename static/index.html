@@ -48,6 +48,7 @@
 			const codeProgress = document.getElementById("code-progress");
 			const codeStage = document.getElementById("code-stage");
 			let redeemPoll = null;
+			let redeemGen = 0;
 
 			function claimLabelFromPath() {
 				const match = location.pathname.match(/^\/claim\/(.+)$/);
@@ -58,7 +59,8 @@
 					return match[1];
 				}
 			}
-			const claimLabel = claimLabelFromPath();
+				const claimLabel = claimLabelFromPath();
+				const claimCode = new URLSearchParams(location.search).get("code");
 
 			function renderButtons(pools) {
 				buttonsContainer.innerHTML = "";
@@ -178,10 +180,12 @@
 				status.innerText = "Assigning your machine...";
 
 				try {
+					const claimBody = poolName ? { pool: poolName } : {};
+					if (claimCode) claimBody.code = claimCode;
 					const response = await fetch("/api/claim", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify(poolName ? { pool: poolName } : {})
+						body: JSON.stringify(claimBody)
 					});
 					const data = await response.json();
 
@@ -209,10 +213,12 @@
 				status.innerText = "Assigning your machine...";
 
 				try {
+					const claimBody = { pool: label };
+					if (claimCode) claimBody.code = claimCode;
 					const response = await fetch("/api/claim", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ pool: label })
+						body: JSON.stringify(claimBody)
 					});
 					const data = await response.json();
 					if (!response.ok) {
@@ -274,10 +280,14 @@
 				codeInput.focus();
 			}
 
-			function pollRedeem(ticket) {
+			function pollRedeem(ticket, gen) {
 				codeForm.hidden = true;
 				codeProgress.hidden = false;
 				redeemPoll = setInterval(async () => {
+					if (gen !== redeemGen) {
+						clearInterval(redeemPoll);
+						return;
+					}
 					try {
 						const response = await fetch(`/api/redeem/${ticket}`);
 						const data = await response.json();
@@ -295,6 +305,7 @@
 			async function redeemCode() {
 				const code = codeInput.value.trim();
 				if (!code) return;
+				const gen = ++redeemGen;
 				codeError.textContent = "";
 				codeInput.disabled = true;
 				codeSubmitBtn.disabled = true;
@@ -307,17 +318,32 @@
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ code })
 					});
+					if (gen !== redeemGen) return;
 					const data = await response.json();
 					if (response.ok && data.status === "ready") {
 						finishRedeem(data.url);
 					} else if (response.ok && data.status === "provisioning") {
-						pollRedeem(data.ticket);
+						pollRedeem(data.ticket, gen);
 					} else {
 						redeemFailed(data.detail || "Unknown code.");
 					}
 				} catch (error) {
-					redeemFailed("Network error. Please try again.");
+					if (gen === redeemGen) redeemFailed("Network error. Please try again.");
 				}
+			}
+
+			function cancelRedeem() {
+				redeemGen += 1;
+				if (redeemPoll) {
+					clearInterval(redeemPoll);
+					redeemPoll = null;
+				}
+				codeProgress.hidden = true;
+				codeForm.hidden = false;
+				codeInput.disabled = false;
+				codeSubmitBtn.disabled = false;
+				codeInput.value = "";
+				codeError.textContent = "";
 			}
 
 			codeBtn.addEventListener("click", () => {
@@ -335,6 +361,7 @@
 				redeemCode();
 			});
 			codeCancelBtn.addEventListener("click", () => codeDialog.close());
+			codeDialog.addEventListener("close", cancelRedeem);
 
 			init();
 

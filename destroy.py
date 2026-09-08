@@ -3,63 +3,16 @@ import time
 import json
 import concurrent.futures
 import os
-from pathlib import Path
+
+import applog
+import poolstore
+from provision import build_config, get_proxmox_client
 from dotenv import load_dotenv
-from proxmoxer import ProxmoxAPI
 
 load_dotenv()
 
 # Safety net: only VMs with this name prefix are ever touched
 WORKSHOP_PREFIX = "workshop-"
-
-VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
-
-
-def default_config():
-    url_output_file = os.getenv("URL_OUTPUT_FILE", "pool.json")
-    if not os.path.isabs(url_output_file):
-        url_output_file = str(Path(__file__).parent / url_output_file)
-    return {
-        "proxmox_url": os.getenv("PROXMOX_URL"),
-        "proxmox_user": os.getenv("PROXMOX_USER"),
-        "proxmox_token_name": os.getenv("PROXMOX_TOKEN_NAME"),
-        "proxmox_token_secret": os.getenv("PROXMOX_TOKEN_SECRET"),
-        "proxmox_node": os.getenv("PROXMOX_NODE"),
-        "url_output_file": url_output_file,
-    }
-
-
-def build_config(overrides=None):
-    config = default_config()
-    if overrides:
-        for key, value in overrides.items():
-            if key in config and value is not None and value != "":
-                config[key] = value
-
-    proxmox_host = config["proxmox_url"]
-    proxmox_scheme = "https"
-    if proxmox_host.startswith("http://"):
-        proxmox_scheme = "http"
-        proxmox_host = proxmox_host[len("http://"):]
-    elif proxmox_host.startswith("https://"):
-        proxmox_host = proxmox_host[len("https://"):]
-    config["proxmox_host"] = proxmox_host
-    config["proxmox_scheme"] = proxmox_scheme
-
-    return config
-
-
-def get_proxmox_client(config):
-    proxmox = ProxmoxAPI(
-        config["proxmox_host"],
-        user=config["proxmox_user"],
-        token_name=config["proxmox_token_name"],
-        token_value=config["proxmox_token_secret"],
-        verify_ssl=VERIFY_SSL
-    )
-    if config["proxmox_scheme"] == "http":
-        proxmox._store["base_url"] = proxmox._store["base_url"].replace("https://", "http://", 1)
-    return proxmox
 
 
 def destroy_worker(proxmox, node_name, vmid, vm_name, log):
@@ -101,7 +54,7 @@ def load_pool(pool_output_file):
     return []
 
 
-def run_teardown(config, mode="all", vmids=None, log=print):
+def run_teardown(config, mode="all", vmids=None, log=applog.log):
     """mode: 'all', 'expired', or 'specific' (vmids required for 'specific')."""
     proxmox = get_proxmox_client(config)
     pool_output_file = config["url_output_file"]
@@ -150,18 +103,9 @@ def run_teardown(config, mode="all", vmids=None, log=print):
         log(result)
 
     if pool_output_file:
-        current_pool = load_pool(pool_output_file)
-        remaining_pool = [entry for entry in current_pool if entry.get('vmid') not in destroyed_vmids]
-        tmp = pool_output_file + ".tmp"
-        with open(tmp, "w") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                json.dump(remaining_pool, f, indent=2)
-                f.flush()
-                os.fchmod(f.fileno(), 0o600)
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        os.replace(tmp, pool_output_file)
+        remaining_pool = poolstore.update(
+            pool_output_file,
+            lambda entries: [entry for entry in entries if entry.get('vmid') not in destroyed_vmids])
         log(f"\nUpdated pool file: {pool_output_file} ({len(remaining_pool)} entries remaining)")
 
     return results
@@ -176,12 +120,12 @@ if __name__ == "__main__":
         if confirm.strip().lower() == 'yes':
             run_teardown(cli_config, mode="all")
         else:
-            print("Teardown aborted.")
+            applog.log.info("Teardown aborted.")
     elif choice == 'e':
         confirm = input("⚠️ WARNING: This will immediately power off and destroy EXPIRED workshop VMs. Type 'yes' to proceed: ")
         if confirm.strip().lower() == 'yes':
             run_teardown(cli_config, mode="expired")
         else:
-            print("Teardown aborted.")
+            applog.log.info("Teardown aborted.")
     else:
-        print("Teardown aborted.")
+        applog.log.info("Teardown aborted.")

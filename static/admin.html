@@ -138,14 +138,27 @@
             ? new Date(entry.expires_at * 1000).toLocaleString()
             : "n/a";
          const tr = document.createElement("tr");
-         tr.innerHTML = `
-									<td><input type="checkbox" class="vm-checkbox" value="${entry.vmid}"></td>
-									<td>${entry.vmid}</td>
-									<td>${entry.pool ?? ""}</td>
-									<td>${entry.student_id ?? ""}</td>
-									<td><span class="status-pill status-${statusLabel}">${statusLabel}</span></td>
-									<td>${expiresLabel}</td>
-								`;
+         const checkCell = document.createElement("td");
+         const checkbox = document.createElement("input");
+         checkbox.type = "checkbox";
+         checkbox.className = "vm-checkbox";
+         checkbox.value = entry.vmid;
+         checkCell.appendChild(checkbox);
+         tr.appendChild(checkCell);
+         for (const value of [entry.vmid, entry.pool ?? "", entry.student_id ?? ""]) {
+            const td = document.createElement("td");
+            td.textContent = value;
+            tr.appendChild(td);
+         }
+         const statusCell = document.createElement("td");
+         const pill = document.createElement("span");
+         pill.className = `status-pill status-${statusLabel}`;
+         pill.textContent = statusLabel;
+         statusCell.appendChild(pill);
+         tr.appendChild(statusCell);
+         const expiresCell = document.createElement("td");
+         expiresCell.textContent = expiresLabel;
+         tr.appendChild(expiresCell);
          poolRows.appendChild(tr);
       }
    }
@@ -194,7 +207,8 @@
          const copyBtn = document.createElement("button");
          copyBtn.textContent = "Copy link";
          copyBtn.addEventListener("click", () => {
-            copyToClipboard(`${location.origin}/claim/${encodeURIComponent(pool.name)}`);
+            const code = pool.config.pool_code ? `?code=${encodeURIComponent(pool.config.pool_code)}` : "";
+            copyToClipboard(`${location.origin}/claim/${encodeURIComponent(pool.name)}${code}`);
             copyBtn.textContent = "Copied!";
             setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
          });
@@ -271,9 +285,32 @@
 
    async function pollJob(jobId) {
       if (pollHandle) clearInterval(pollHandle);
+      let failures = 0;
+      const finish = () => {
+         clearInterval(pollHandle);
+         pollHandle = null;
+         jobStatus.textContent = "Job no longer running.";
+         setBusy(false);
+         loadPool();
+         loadPools();
+      };
       pollHandle = setInterval(async () => {
-         const res = await fetch(`/api/admin/job/${jobId}`);
-         if (!res.ok) return;
+         let res;
+         try {
+            res = await fetch(`/api/admin/job/${jobId}`);
+         } catch (error) {
+            if (++failures >= 5) finish();
+            return;
+         }
+         if (res.status === 404) {
+            finish();
+            return;
+         }
+         if (!res.ok) {
+            if (++failures >= 5) finish();
+            return;
+         }
+         failures = 0;
          const job = await res.json();
          jobStatus.textContent = `${job.kind} — ${job.status}`;
          jobLog.textContent = job.log.join("\n");
