@@ -43,6 +43,7 @@ def default_config():
         "template_vm_username": os.getenv("TEMPLATE_VM_USERNAME"),
         "template_vm_password": os.getenv("TEMPLATE_VM_PASSWORD"),
         "guacamole_url": os.getenv("GUACAMOLE_URL"),
+        "guacamole_internal_url": os.getenv("GUACAMOLE_INTERNAL_URL") or os.getenv("GUACAMOLE_URL"),
         "guacamole_key": os.getenv("GUACAMOLE_KEY"),
         "guac_link_ttl_seconds": os.getenv("GUAC_LINK_TTL_SECONDS", 7200),
         "url_output_file": url_output_file,
@@ -58,6 +59,12 @@ def build_config(overrides=None):
         for key, value in overrides.items():
             if key in config and value is not None and value != "":
                 config[key] = value
+
+    # Mint tokens against the internal/direct Guacamole address (fast, no
+    # Cloudflare hairpin / shared rate-limit bucket); students still get the
+    # public URL. Falls back to the public URL when no internal one is set.
+    if not config.get("guacamole_internal_url"):
+        config["guacamole_internal_url"] = config["guacamole_url"]
 
     for field in INT_FIELDS:
         config[field] = int(config[field])
@@ -138,8 +145,9 @@ def generate_guac_url(config, target_ip, student_id):
 
     base64_encrypted = base64.b64encode(encrypted_data).decode('utf-8')
 
+    api_url = config.get("guacamole_internal_url") or config["guacamole_url"]
     response = requests.post(
-        f"{config['guacamole_url']}/api/tokens",
+        f"{api_url}/api/tokens",
         data={"data": base64_encrypted},
         timeout=15
     )
