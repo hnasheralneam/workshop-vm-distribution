@@ -54,7 +54,7 @@ def load_pool(pool_output_file):
     return []
 
 
-def run_teardown(config, mode="all", vmids=None, log=applog.log):
+def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
     """mode: 'all', 'expired', or 'specific' (vmids required for 'specific')."""
     proxmox = get_proxmox_client(config)
     pool_output_file = config["url_output_file"]

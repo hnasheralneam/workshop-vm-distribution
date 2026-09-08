@@ -222,13 +222,13 @@ def append_pool_entries(output_file, entries):
     return poolstore.update(output_file, lambda pool: pool + entries)
 
 
-def provision_one(config, student_id, log=applog.log):
+def provision_one(config, student_id, log=applog.log.info):
     proxmox = get_proxmox_client(config)
     vmid = int(proxmox.cluster.nextid.get())
     return provision_worker(proxmox, config, vmid, student_id, log)
 
 
-def run_parallel_provisioning(config, count=None, log=applog.log):
+def run_parallel_provisioning(config, count=None, log=applog.log.info):
     proxmox = get_proxmox_client(config)
     count = count if count is not None else config["vm_count"]
 
@@ -297,7 +297,7 @@ if __name__ == "__main__":
 RECONNECT_IP_TIMEOUT = 30
 
 
-def mint_session_url(entry, log=applog.log):
+def mint_session_url(entry, log=applog.log.info):
     """Mint a fresh session URL for an existing entry, using its current IP and
     its stored access credentials (legacy entries fall back to .env defaults)."""
     config = build_config({
