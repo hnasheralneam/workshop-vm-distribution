@@ -9,3 +9,4 @@ configs.json
 *.bak-*
 *.lock
 server.log*
+.zcode/

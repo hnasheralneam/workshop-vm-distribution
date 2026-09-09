@@ -1,0 +1,18 @@
+# This file is deployed by setup.sh
+[Unit]
+Description=Workshop VM Distribution portal
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=__APP_ROOT__
+ExecStart=__APP_ROOT__/deploy/run.sh
+Environment=PORT=__PORT__
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

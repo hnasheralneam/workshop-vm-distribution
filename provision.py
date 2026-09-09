@@ -25,6 +25,15 @@ INT_FIELDS = {"template_vm_id", "guac_link_ttl_seconds", "vm_count"}
 
 SECRET_FIELDS = {"proxmox_token_secret", "template_vm_password", "guacamole_key"}
 
+TEMPLATE_FIELDS = {
+    "template_vm_access_method",
+    "template_vm_id",
+    "template_vm_username",
+    "template_vm_password",
+    "vm_count",
+    "guac_link_ttl_seconds",
+}
+
 VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 
@@ -38,18 +47,18 @@ def default_config():
         "proxmox_token_name": os.getenv("PROXMOX_TOKEN_NAME"),
         "proxmox_token_secret": os.getenv("PROXMOX_TOKEN_SECRET"),
         "proxmox_node": os.getenv("PROXMOX_NODE"),
-        "template_vm_access_method": os.getenv("TEMPLATE_VM_ACCESS_METHOD"),
-        "template_vm_id": os.getenv("TEMPLATE_VM_ID"),
-        "template_vm_username": os.getenv("TEMPLATE_VM_USERNAME"),
-        "template_vm_password": os.getenv("TEMPLATE_VM_PASSWORD"),
+        "template_vm_access_method": None,
+        "template_vm_id": None,
+        "template_vm_username": None,
+        "template_vm_password": None,
         "guacamole_url": os.getenv("GUACAMOLE_URL"),
         "guacamole_internal_url": os.getenv("GUACAMOLE_INTERNAL_URL") or os.getenv("GUACAMOLE_URL"),
         "guacamole_key": os.getenv("GUACAMOLE_KEY"),
-        "guac_link_ttl_seconds": os.getenv("GUAC_LINK_TTL_SECONDS", 7200),
+        "guac_link_ttl_seconds": None,
         "url_output_file": url_output_file,
-        "vm_count": os.getenv("VM_COUNT", 5),
-        "pool_name": os.getenv("POOL_NAME", ""),
-        "pool_code": os.getenv("POOL_CODE", ""),
+        "vm_count": None,
+        "pool_name": "",
+        "pool_code": "",
         "dispenser": "",
     }
 
@@ -68,7 +77,8 @@ def build_config(overrides=None):
         config["guacamole_internal_url"] = config["guacamole_url"]
 
     for field in INT_FIELDS:
-        config[field] = int(config[field])
+        if config[field] is not None:
+            config[field] = int(config[field])
 
     proxmox_host = config["proxmox_url"]
     proxmox_scheme = "https"
@@ -81,6 +91,15 @@ def build_config(overrides=None):
     config["proxmox_scheme"] = proxmox_scheme
 
     return config
+
+
+def require_template_fields(config):
+    """Raise ValueError naming any missing template field. Call this before
+    provisioning a VM (config comes from admin-submitted overrides with no
+    env fallback); not needed for destroy/mint-only call sites."""
+    missing = sorted(f for f in TEMPLATE_FIELDS if not config.get(f) and config.get(f) != 0)
+    if missing:
+        raise ValueError(f"Missing required field(s): {', '.join(missing)}")
 
 
 def get_proxmox_client(config):
@@ -299,21 +318,37 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
 
 
 if __name__ == "__main__":
-    cli_config = build_config()
+    cli_config = build_config({
+        "template_vm_access_method": input("Access method (ssh/vnc/rdp): ").strip(),
+        "template_vm_id": input("Template VM ID: ").strip(),
+        "template_vm_username": input("Template username: ").strip(),
+        "template_vm_password": input("Template password: ").strip(),
+        "vm_count": input("VM count: ").strip(),
+        "guac_link_ttl_seconds": input("Link TTL (seconds): ").strip(),
+    })
+    require_template_fields(cli_config)
     applog.log.info(f"=== Creating {cli_config['vm_count']} workshop VMs ===")
     run_parallel_provisioning(cli_config)
 
 RECONNECT_IP_TIMEOUT = 30
 
 
-def mint_session_url(entry, log=applog.log.info):
-    """Mint a fresh session URL for an existing entry, using its current IP and
-    its stored access credentials (legacy entries fall back to .env defaults)."""
+def mint_session_url(entry, guac_link_ttl_seconds, log=applog.log.info):
+    """Mint a fresh session URL for an existing entry, using its current IP,
+    its stored access credentials, and its pool's configured link TTL.
+    vm_count is irrelevant here (no VM is being provisioned) so a placeholder
+    is passed just to satisfy build_config's int coercion."""
     config = build_config({
         "template_vm_access_method": entry.get("access_method"),
         "template_vm_username": entry.get("template_vm_username"),
         "template_vm_password": entry.get("template_vm_password"),
+        "guac_link_ttl_seconds": guac_link_ttl_seconds,
+        "vm_count": 1,
     })
+    missing = [f for f in ("template_vm_access_method", "template_vm_username", "template_vm_password")
+               if not config.get(f)]
+    if missing:
+        raise ValueError(f"Entry missing stored field(s): {', '.join(missing)}")
     proxmox = get_proxmox_client(config)
     vmid = entry["vmid"]
     try:

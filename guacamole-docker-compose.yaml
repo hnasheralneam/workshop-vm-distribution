@@ -10,9 +10,9 @@ services:
     image: postgres:15
     container_name: guac_postgres
     environment:
-      POSTGRES_DB: guacamole_db
-      POSTGRES_USER: guacamole_user
-      POSTGRES_PASSWORD: xxxxxxxxxxxxxx
+      POSTGRES_DB: __GUAC_DB_NAME__
+      POSTGRES_USER: __GUAC_DB_USER__
+      POSTGRES_PASSWORD: __GUAC_DB_PASS__
     networks:
       - guac_network
     volumes:
@@ -27,12 +27,12 @@ services:
     environment:
       GUACD_HOSTNAME: guacd
       POSTGRESQL_HOSTNAME: postgres
-      POSTGRESQL_DATABASE: guacamole_db
-      POSTGRESQL_USER: guacamole_user
-      POSTGRESQL_PASSWORD: xxxxxxxxxxxxxx
+      POSTGRESQL_DATABASE: __GUAC_DB_NAME__
+      POSTGRESQL_USER: __GUAC_DB_USER__
+      POSTGRESQL_PASSWORD: __GUAC_DB_PASS__
 
       # Must be exactly 32 hex characters (128-bit)
-      JSON_SECRET_KEY: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      JSON_SECRET_KEY: '__GUAC_JSON_KEY__'
     ports:
       - "8080:8080"
     networks:

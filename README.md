@@ -1,6 +1,7 @@
 # Workshop VM Distribution
 
-Provisions per-student workshop VMs on Proxmox and hands them out through a web portal, using Guacamole for browser-based terminal access.
+Provisions per-student workshop VMs on Proxmox and hands them out through a web portal, using Guacamole for browser-based terminal access.  
+Great for students to follow along with a hands-on box during a workshop, or to give take-home practice vms.
 
 ## Requirements
 - Python 3
@@ -19,19 +20,22 @@ cp .env.example .env
 Edit `.env` with your Proxmox and Guacamole details:
 
 - `PROXMOX_URL`, `PROXMOX_USER`, `PROXMOX_TOKEN_NAME`, `PROXMOX_TOKEN_SECRET`, `PROXMOX_NODE`, `VERIFY_SSL`
-- `TEMPLATE_VM_ACCESS_METHOD` (`ssh`, `vnc`, or `rdp`), `TEMPLATE_VM_ID`, `TEMPLATE_VM_USERNAME`, `TEMPLATE_VM_PASSWORD`
-- `GUACAMOLE_URL`, `GUACAMOLE_KEY`, `GUAC_LINK_TTL_SECONDS`, `REAP_INTERVAL_SECONDS`
-- `URL_OUTPUT_FILE`, `VM_COUNT`, `ADMIN_PASSWORD`, `LOG_FILE`
+- `GUACAMOLE_URL`, `GUACAMOLE_INTERNAL_URL`, `GUACAMOLE_KEY`
+- `URL_OUTPUT_FILE`, `ADMIN_PASSWORD`, `LOG_FILE`
+
+Template VM id/username/password, access method, VM count, and link duration aren't in `.env` — they're entered per pool, either in the admin "New deployment" form or interactively when running `provision.py` directly.
 
 ## CLI Usage
-1. Provision VMs (writes `pool.json`):
+1. Provision VMs (writes `pool.json`; prompts for access method, template VM id/username/password, VM count, and link TTL):
    ```bash
    python provision.py
    ```
 2. Start the portal (serves `index.html` on `http://0.0.0.0:5000`, students claim a VM at `/api/claim`):
    ```bash
-   python server.py
+   gunicorn -w 1 --threads "$(( $(nproc) > 2 ? $(nproc) - 1 : $(nproc) ))" -b 0.0.0.0:5000 server:app
    ```
+   `-w 1` is required: pool/job state and the VM-reaper thread live in process memory, so extra worker processes would each keep their own out-of-sync copy. `--threads` gives concurrency within that one process instead (cores − 1 above 2 cores, otherwise all cores, so this also works on single- and dual-core systems). (`python server.py` still works for quick local testing, but runs Flask's unhardened dev server.)
+   To provision a whole fresh host instead, `sudo bash deploy/setup.sh` (flags + env overrides in the script header) installs the Guacamole docker stack, clones + sets up the app, writes `.env`, and installs `deploy/workshop-vm.service` — a `workshop-vm` systemd service whose `ExecStart` is `deploy/run.sh`, the gunicorn command above resolving paths from its own location. Run the portal by hand with `deploy/run.sh`.
 3. Tear down all workshop VMs when done (interactive confirmation, only removes `workshop-` prefixed VMs):
    ```bash
    python destroy.py

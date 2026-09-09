@@ -25,7 +25,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent
 POOL_FILE = BASE_DIR / "pool.json"
 CONFIGS_FILE = BASE_DIR / "configs.json"
-REAP_INTERVAL_SECONDS = int(os.getenv("REAP_INTERVAL_SECONDS", "60"))
+REAP_INTERVAL_SECONDS = 60
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 app = Flask(__name__, static_folder=None)
@@ -63,6 +63,11 @@ def load_configs():
             return json.load(f)
         except json.JSONDecodeError:
             return {}
+
+
+def entry_ttl(entry):
+    config = load_configs().get(entry.get("pool"))
+    return (config or {}).get("guac_link_ttl_seconds", 7200)
 
 
 def config_pool_name(config):
@@ -137,6 +142,11 @@ def style():
     return send_from_directory(BASE_DIR / "static", "style.css")
 
 
+@app.route("/scripts/<path:filename>")
+def scripts(filename):
+    return send_from_directory(BASE_DIR / "static" / "scripts", filename)
+
+
 @app.route("/images/<path:filename>")
 def images(filename):
     return send_from_directory(BASE_DIR / "images", filename)
@@ -197,7 +207,7 @@ def claim():
 
     entry = state["entry"]
     try:
-        url = provision.mint_session_url(entry)
+        url = provision.mint_session_url(entry, entry_ttl(entry))
     except Exception as exc:
         applog.log.info(f"Claim: mint failed for VM {entry['vmid']}: {exc}")
         poolstore.update(POOL_FILE, lambda es: unreserve(es, entry["vmid"]))
@@ -246,7 +256,7 @@ def validate():
 
     replacement = state["entry"]
     try:
-        fresh = provision.mint_session_url(replacement)
+        fresh = provision.mint_session_url(replacement, entry_ttl(replacement))
     except Exception as exc:
         applog.log.info(f"Validate: replacement mint failed for VM {replacement['vmid']}: {exc}")
         poolstore.update(POOL_FILE, lambda es: unreserve(es, replacement["vmid"]))
@@ -270,7 +280,7 @@ def reconnect():
     if is_expired(entry):
         return jsonify(valid=False, expired=True), 410
     try:
-        fresh = provision.mint_session_url(entry)
+        fresh = provision.mint_session_url(entry, entry_ttl(entry))
     except Exception as exc:
         applog.log.info(f"Reconnect: mint failed for VM {entry['vmid']}: {exc}")
         return jsonify(valid=False, detail="VM is not reachable right now. Please try again."), 502
@@ -405,7 +415,7 @@ def redeem():
     if "entry" in state:
         entry = state["entry"]
         try:
-            url = provision.mint_session_url(entry)
+            url = provision.mint_session_url(entry, entry_ttl(entry))
         except Exception as exc:
             applog.log.info(f"Redeem: mint failed for VM {entry['vmid']}: {exc}")
             poolstore.update(POOL_FILE, lambda es: unreserve(es, entry["vmid"]))
@@ -491,15 +501,6 @@ def admin_page():
     return send_from_directory(BASE_DIR / "static", "admin.html")
 
 
-@app.route("/api/admin/defaults")
-@limiter.limit(ADMIN_LIMIT)
-@admin_required
-def admin_defaults():
-    config = provision.build_config()
-    safe = {k: v for k, v in config.items() if k not in provision.SECRET_FIELDS}
-    return jsonify(safe)
-
-
 @app.route("/api/admin/pool")
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
@@ -523,17 +524,13 @@ def admin_pool():
 @admin_required
 def admin_provision():
     body = request.get_json(silent=True) or {}
-    overrides = {k: v for k, v in body.items() if k != "vm_count"}
     try:
-        config = provision.build_config(overrides)
+        config = provision.build_config(body)
+        provision.require_template_fields(config)
     except (ValueError, TypeError) as exc:
         return jsonify(detail=f"Invalid configuration: {exc}"), 400
 
-    count = body.get("vm_count")
-    try:
-        count = int(count) if count not in (None, "") else None
-    except (ValueError, TypeError):
-        return jsonify(detail="vm_count must be an integer."), 400
+    count = config["vm_count"]
 
     def save(configs):
         if not config.get("pool_code"):
@@ -583,6 +580,7 @@ def admin_update_pool(name):
     overrides = {k: v for k, v in body.items() if k != "pool_name" and v not in (None, "")}
     try:
         config = provision.build_config({**saved, **overrides})
+        provision.require_template_fields(config)
     except (ValueError, TypeError) as exc:
         return jsonify(detail=f"Invalid configuration: {exc}"), 400
 
@@ -668,6 +666,7 @@ def admin_redeploy():
     config["vm_count"] = count
     try:
         config = provision.build_config(config)
+        provision.require_template_fields(config)
     except (ValueError, TypeError) as exc:
         return jsonify(detail=f"Invalid configuration: {exc}"), 400
 
@@ -713,10 +712,16 @@ def admin_job(job_id=None):
     return jsonify(job_snapshot)
 
 
-if __name__ == "__main__":
+def startup():
     poolstore.update(POOL_FILE, lambda entries: [{k: v for k, v in e.items() if k != "reserved"} for e in entries])
     poolstore.update(CONFIGS_FILE, lambda configs: {name: {**cfg, "dispenser": cfg.get("dispenser", True)} for name, cfg in configs.items()}, dict)
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()
+
+
+startup()
+
+if __name__ == "__main__":
+    # gunicorn -w 1 --threads "$(( $(nproc) > 2 ? $(nproc) - 1 : $(nproc) ))" -b 0.0.0.0:5000 server:app
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
