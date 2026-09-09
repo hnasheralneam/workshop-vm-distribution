@@ -160,7 +160,7 @@ function openDeployModal(pool) {
       provisionForm.elements.template_vm_access_method.value = "ssh";
       provisionForm.elements.template_vm_username.value = "";
       provisionForm.elements.template_vm_id.value = "";
-      dispenserInput.checked = false;
+      dispenserInput.checked = true;
       passwordField.value = "";
       passwordField.placeholder = "";
       provisionBtn.textContent = "Provision";

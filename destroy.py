@@ -35,6 +35,10 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
             else:
                 raise TimeoutError(f"VM {vmid} did not stop within 120 seconds")
 
+        identity = node.qemu(vmid).status.current.get().get("name")
+        if identity != vm_name:
+            raise RuntimeError(f"VM {vmid} is now {identity!r}, aborting destroy")
+
         log(f"[{vmid}] 💥 Destroying {vm_name}...")
         node.qemu(vmid).delete()
         return f"✅ Successfully destroyed {vm_name} ({vmid})"

@@ -12,6 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -36,6 +37,11 @@ ADMIN_LIMIT = "60/minute"
 ticket_lock = threading.Lock()
 job_lock = threading.Lock()
 current_job = None  # keys: id, kind, status, log, started_at, finished_at, error
+
+
+@app.errorhandler(RateLimitExceeded)
+def rate_limited(exc):
+    return jsonify(detail="Too many requests. Please wait a minute and try again."), 429
 
 
 def is_expired(entry):
@@ -217,9 +223,11 @@ def validate():
     body = request.get_json(silent=True) or {}
     url = body.get("url", "")
     entries = poolstore.load(POOL_FILE)
-    entry = next((e for e in entries if e.get("url") == url and e.get("claimed")), None)
+    entry = next((e for e in entries if e.get("url") == url), None)
     if entry is None:
         return jsonify(valid=False)
+    if not entry.get("claimed"):
+        return jsonify(valid=False, expired=is_expired(entry))
     if not is_expired(entry):
         return jsonify(valid=True)
 
@@ -266,8 +274,12 @@ def reconnect():
     """Stored ?token= URLs idle out (~60min), so re-mint a fresh session with the VM's current IP."""
     body = request.get_json(silent=True) or {}
     url = body.get("url", "")
-    entry = next((e for e in poolstore.load(POOL_FILE) if e.get("url") == url and e.get("claimed")), None)
+    entry = next((e for e in poolstore.load(POOL_FILE) if e.get("url") == url), None)
     if entry is None:
+        return jsonify(valid=False), 404
+    if not entry.get("claimed"):
+        if is_expired(entry):
+            return jsonify(valid=False, expired=True), 410
         return jsonify(valid=False), 404
     if is_expired(entry):
         return jsonify(valid=False, expired=True), 410
@@ -343,7 +355,7 @@ def set_ticket(ticket, **fields):
 
 def find_pool_by_code(code):
     code = (code or "").strip().upper()
-    if not code:
+    if not code or not code.isascii():
         return None
     for config in load_configs().values():
         stored = (config.get("pool_code") or "").strip().upper()
@@ -353,6 +365,8 @@ def find_pool_by_code(code):
 
 
 def run_redeem_provision(ticket, config):
+    vmid = None
+
     def log(message):
         applog.log.info(message)
         text = str(message).lower()
@@ -363,8 +377,8 @@ def run_redeem_provision(ticket, config):
 
     try:
         config = provision.build_config(config)
-        vmid, student_id, url, expires_at = provision.provision_one(
-            config, f"student-{uuid.uuid4().hex[:6]}", log)
+        student_id = f"student-{uuid.uuid4().hex[:6]}"
+        vmid, student_id, url, expires_at = provision.provision_one(config, student_id, log)
         set_ticket(ticket, stage="adding")
         entry = {
             "vmid": vmid,
@@ -381,6 +395,13 @@ def run_redeem_provision(ticket, config):
         set_ticket(ticket, status="ready", url=url)
     except Exception as exc:
         applog.log.info(f"Redeem provisioning failed: {exc}")
+        if vmid is not None:
+            try:
+                dconfig = destroy.build_config()
+                proxmox = destroy.get_proxmox_client(dconfig)
+                destroy.destroy_worker(proxmox, dconfig["proxmox_node"], vmid, f"workshop-{student_id}", applog.log.info)
+            except Exception as cleanup_exc:
+                applog.log.info(f"Redeem cleanup: destroying VM {vmid} failed: {cleanup_exc}")
         set_ticket(ticket, status="error", detail="Provisioning failed. Please try again.")
 
 
@@ -615,6 +636,8 @@ def admin_pool_code():
     body = request.get_json(silent=True) or {}
     name = body.get("pool")
     code = (body.get("code") or "").strip().upper()
+    if code and not code.isascii():
+        return jsonify(detail="Pool code must use letters and numbers."), 400
     state = {}
 
     def set_code(configs):
