@@ -67,7 +67,7 @@ async function init() {
 		codeBtn.hidden = !(data.coded > 0);
 		const pools = data.pools || [];
 		if (pools.length > 1) {
-			renderButtons(pools.map((p) => ({ text: `Claim ${p.name} (${p.available})`, name: p.name })));
+			renderButtons(pools.map((p) => ({ text: `Claim ${p.name}`, name: p.name })));
 		} else if (pools.length === 1) {
 			renderButtons([{ text: "Claim", name: pools[0].name }]);
 		} else {

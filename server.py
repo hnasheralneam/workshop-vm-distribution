@@ -154,15 +154,16 @@ def images(filename):
 
 @app.route("/api/types")
 def types():
-    gated = gated_pools()
     pools = {}
     for entry in poolstore.load(POOL_FILE):
-        if not is_available(entry) or display_name(entry) in gated:
+        if not is_available(entry):
             continue
         name = display_name(entry)
-        group = pools.setdefault(name, {"name": name, "os": os_type(entry), "available": 0})
+        group = pools.setdefault(name, {"name": name, "available": 0})
         group["available"] += 1
-    return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated))
+    for name in load_configs():
+        pools.setdefault(name, {"name": name, "available": 0})
+    return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated_pools()))
 
 
 @app.route("/api/claim", methods=["POST"])
@@ -171,12 +172,6 @@ def claim():
     body = request.get_json(silent=True) or {}
     requested_pool = body.get("pool")
     requested_os = body.get("os")
-    code = (body.get("code") or "").strip().upper()
-    gated = gated_pools()
-    if requested_pool in gated:
-        stored = (load_configs().get(requested_pool, {}).get("pool_code") or "").strip().upper()
-        if not stored or not hmac.compare_digest(stored, code):
-            return jsonify(detail="This pool requires a valid pool code."), 403
 
     state = {}
 
@@ -185,7 +180,6 @@ def claim():
         if requested_pool:
             available = [entry for entry in available if display_name(entry) == requested_pool]
         else:
-            available = [entry for entry in available if display_name(entry) not in gated]
             if requested_os:
                 available = [entry for entry in available if os_type(entry) == requested_os]
         if available:
@@ -229,7 +223,6 @@ def validate():
     if not is_expired(entry):
         return jsonify(valid=True)
 
-    gated = gated_pools()
     state = {}
 
     def replace_expired(current):
@@ -240,8 +233,7 @@ def validate():
         expired["claimed"] = False
         available = [e for e in current if is_available(e) and display_name(e) == display_name(expired)]
         if not available:
-            available = [e for e in current if is_available(e) and os_type(e) == os_type(expired)
-                         and display_name(e) not in gated]
+            available = [e for e in current if is_available(e) and os_type(e) == os_type(expired)]
         if available:
             replacement = random.choice(available)
             replacement["reserved"] = True
