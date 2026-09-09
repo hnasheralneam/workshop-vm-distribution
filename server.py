@@ -186,7 +186,14 @@ def claim():
 
     poolstore.update(POOL_FILE, reserve)
     if "entry" not in state:
-        return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
+        config = load_configs().get(requested_pool or "")
+        if not config or not config.get("dispenser"):
+            return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
+        ticket = str(uuid.uuid4())
+        with ticket_lock:
+            redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
+        threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
+        return jsonify(status="provisioning", ticket=ticket, pool=requested_pool), 202
 
     entry = state["entry"]
     try:
@@ -708,6 +715,7 @@ def admin_job(job_id=None):
 
 if __name__ == "__main__":
     poolstore.update(POOL_FILE, lambda entries: [{k: v for k, v in e.items() if k != "reserved"} for e in entries])
+    poolstore.update(CONFIGS_FILE, lambda configs: {name: {**cfg, "dispenser": cfg.get("dispenser", True)} for name, cfg in configs.items()}, dict)
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()

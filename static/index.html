@@ -189,7 +189,9 @@
 					});
 					const data = await response.json();
 
-					if (response.ok) {
+					if (data.status === "provisioning") {
+						pollClaim(data.ticket);
+					} else if (response.ok) {
 						localStorage.setItem("assigned_vm_url", data.url);
 						status.innerText = "VM claimed! Redirecting...";
 
@@ -252,6 +254,30 @@
 				if (stage === "network") return "Waiting for network...";
 				if (stage === "adding") return "Adding machine to pool...";
 				return "Preparing your machine...";
+			}
+
+			function pollClaim(ticket) {
+				status.innerText = stageText("cloning");
+				const poll = setInterval(async () => {
+					try {
+						const response = await fetch(`/api/redeem/${ticket}`);
+						const data = await response.json();
+						if (!response.ok || data.status === "error") {
+							clearInterval(poll);
+							status.innerText = data.detail || "Provisioning failed. Please try again.";
+							setButtonsDisabled(false);
+							return;
+						}
+						if (data.stage) status.innerText = stageText(data.stage);
+						if (data.status === "ready") {
+							clearInterval(poll);
+							localStorage.setItem("assigned_vm_url", data.url);
+							existingUrl = data.url;
+							status.innerText = "VM ready! Redirecting...";
+							window.location.href = data.url;
+						}
+					} catch (error) {}
+				}, 3000);
 			}
 
 			function finishRedeem(url) {

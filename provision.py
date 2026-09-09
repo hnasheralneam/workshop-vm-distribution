@@ -50,6 +50,7 @@ def default_config():
         "vm_count": os.getenv("VM_COUNT", 5),
         "pool_name": os.getenv("POOL_NAME", ""),
         "pool_code": os.getenv("POOL_CODE", ""),
+        "dispenser": "",
     }
 
 
