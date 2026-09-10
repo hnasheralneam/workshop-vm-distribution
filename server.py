@@ -240,15 +240,13 @@ def images(filename):
 
 @app.route("/api/types")
 def types():
-    pools = {}
+    pools = {name: {"name": name, "available": 0, "dispenser": bool(config.get("dispenser"))} for name, config in load_configs().items()}
     for entry in poolstore.load(POOL_FILE):
         if not is_available(entry):
             continue
         name = display_name(entry)
-        group = pools.setdefault(name, {"name": name, "available": 0})
+        group = pools.setdefault(name, {"name": name, "available": 0, "dispenser": False})
         group["available"] += 1
-    for name in load_configs():
-        pools.setdefault(name, {"name": name, "available": 0})
     return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated_pools()))
 
 

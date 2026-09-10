@@ -31,7 +31,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-	:root {
+	body:not(.portal) {
 		--bg: #f5f6f8;
 		--bg-elevated: #ffffff;
 		--bg-inset: #f0f1f4;
@@ -68,6 +68,10 @@ body {
 	color: var(--text);
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 	background-size: cover;
+}
+
+body.portal {
+	color-scheme: dark;
 }
 
 .subtitle {
@@ -394,6 +398,11 @@ body.portal #claim-buttons button {
 	padding: 0.85rem 1rem;
 	font-size: 1rem;
 	transition: background 0.15s ease, transform 0.05s ease;
+	margin: 0;
+}
+
+body.portal button {
+	border-radius: 8px;
 }
 
 body.portal #claim-buttons button:hover:not(:disabled) {
@@ -405,6 +414,7 @@ body.portal #claim-buttons button:active:not(:disabled) {
 }
 
 body.portal #status-message {
+	display: none;
 	margin-top: 1rem;
 	min-height: 1.2em;
 	font-size: 0.9rem;
@@ -412,7 +422,7 @@ body.portal #status-message {
 }
 
 body.portal #code-btn {
-	width: 100%;
+	width: 75%;
 	margin-top: 0.6rem;
 	padding: 0.6rem 1rem;
 	font-size: 0.85rem;

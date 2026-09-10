@@ -13,6 +13,11 @@ const codeStage = document.getElementById("code-stage");
 let redeemPoll = null;
 let redeemGen = 0;
 
+function setStatus(text) {
+	status.style.display = "block";
+	status.innerText = text;
+}
+
 function claimLabelFromPath() {
 	const match = location.pathname.match(/^\/claim\/(.+)$/);
 	if (!match) return null;
@@ -42,11 +47,29 @@ function setButtonsDisabled(disabled) {
 	}
 }
 
+async function loadPoolButtons() {
+	try {
+		const response = await fetch("/api/types");
+		const data = await response.json();
+		codeBtn.hidden = !(data.coded > 0);
+		const pools = (data.pools || []).filter((p) => p.dispenser || p.available > 0);
+		if (pools.length > 1) {
+			renderButtons(pools.map((p) => ({ text: `Claim ${p.name}`, name: p.name })));
+		} else if (pools.length === 1) {
+			renderButtons([{ text: "Claim", name: pools[0].name }]);
+		} else {
+			buttonsContainer.innerHTML = "";
+			setStatus("No VMs are available right now. Please contact your instructor.");
+		}
+	} catch (error) {
+		renderButtons([{ text: "Claim", name: null }]);
+	}
+}
+
 async function init() {
 	if (existingUrl) {
 		renderButtons([{ text: "Reconnect", name: null }]);
-		setStatus("You already have an assigned machine.")
-		status.innerText = "You already have an assigned machine.";
+		setStatus("You already have an assigned machine.");
 		setButtonsDisabled(true);
 		await checkExistingVm();
 	}
@@ -61,21 +84,7 @@ async function init() {
 		return;
 	}
 
-	try {
-		const response = await fetch("/api/types");
-		const data = await response.json();
-		codeBtn.hidden = !(data.coded > 0);
-		const pools = data.pools || [];
-		if (pools.length > 1) {
-			renderButtons(pools.map((p) => ({ text: `Claim ${p.name}`, name: p.name })));
-		} else if (pools.length === 1) {
-			renderButtons([{ text: "Claim", name: pools[0].name }]);
-		} else {
-			renderButtons([{ text: "Claim", name: null }]);
-		}
-	} catch (error) {
-		renderButtons([{ text: "Claim", name: null }]);
-	}
+	await loadPoolButtons();
 }
 
 async function checkExistingVm() {
@@ -92,17 +101,18 @@ async function checkExistingVm() {
 					localStorage.setItem("assigned_vm_url", data.url);
 					existingUrl = data.url;
 					renderButtons([{ text: "Reconnect", name: null }]);
-					status.innerText = "Your previous machine expired. A new machine has been assigned.";
+					setStatus("Your previous machine expired. A new machine has been assigned.");
 				} else {
 					localStorage.removeItem("assigned_vm_url");
 					existingUrl = null;
-					status.innerText = data.expired
+					setStatus(data.expired
 						? "Your previous machine expired and no new machines are available. Please contact your instructor."
-						: "Your previous machine is no longer available. Claim a new one below.";
+						: "Your previous machine is no longer available. Claim a new one below.");
+					await loadPoolButtons();
 				}
 			}
 	} catch (error) {
-		status.innerText = "Network error checking your machine. Please try again.";
+		setStatus("Network error checking your machine. Please try again.");
 	} finally {
 		setButtonsDisabled(false);
 	}
@@ -111,7 +121,7 @@ async function checkExistingVm() {
 async function handleTerminalAccess(poolName, btn) {
 	if (existingUrl) {
 		setButtonsDisabled(true);
-		status.innerText = "Reconnecting...";
+		setStatus("Reconnecting...");
 		try {
 			const response = await fetch("/api/reconnect", {
 				method: "POST",
@@ -122,26 +132,26 @@ async function handleTerminalAccess(poolName, btn) {
 			if (response.ok && data.url) {
 				localStorage.setItem("assigned_vm_url", data.url);
 				existingUrl = data.url;
-				status.innerText = "Redirecting...";
+				setStatus("Redirecting...");
 				window.location.href = data.url;
 			} else if (data.expired) {
 				localStorage.removeItem("assigned_vm_url");
 				existingUrl = null;
-				status.innerText = "Your machine expired. Claim a new one below.";
+				setStatus("Your machine expired. Claim a new one below.");
 				await init();
 			} else {
-				status.innerText = data.detail || "Reconnect failed. Please try again.";
+				setStatus(data.detail || "Reconnect failed. Please try again.");
 				setButtonsDisabled(false);
 			}
 		} catch (error) {
-			status.innerText = "Network error. Please try again.";
+			setStatus("Network error. Please try again.");
 			setButtonsDisabled(false);
 		}
 		return;
 	}
 
 	setButtonsDisabled(true);
-	status.innerText = "Assigning your machine...";
+	setStatus("Assigning your machine...");
 
 	try {
 		const claimBody = poolName ? { pool: poolName } : {};
@@ -157,15 +167,15 @@ async function handleTerminalAccess(poolName, btn) {
 			pollClaim(data.ticket);
 		} else if (response.ok) {
 			localStorage.setItem("assigned_vm_url", data.url);
-			status.innerText = "VM claimed! Redirecting...";
+			setStatus("VM claimed! Redirecting...");
 
 			window.location.href = data.url;
 		} else {
-			status.innerText = data.detail;
+			setStatus(data.detail);
 			setButtonsDisabled(false);
 		}
 	} catch (error) {
-		status.innerText = "Network error. Please try again.";
+		setStatus("Network error. Please try again.");
 		setButtonsDisabled(false);
 	}
 }
@@ -176,7 +186,7 @@ async function handlePoolSwitch(label) {
 		return;
 	}
 	setButtonsDisabled(true);
-	status.innerText = "Assigning your machine...";
+	setStatus("Assigning your machine...");
 
 	try {
 		const claimBody = { pool: label };
@@ -188,7 +198,7 @@ async function handlePoolSwitch(label) {
 		});
 		const data = await response.json();
 		if (!response.ok) {
-			status.innerText = data.detail;
+			setStatus(data.detail);
 			setButtonsDisabled(false);
 			return;
 		}
@@ -204,10 +214,10 @@ async function handlePoolSwitch(label) {
 			});
 		} catch (error) {}
 
-		status.innerText = "VM claimed! Redirecting...";
+		setStatus("VM claimed! Redirecting...");
 		window.location.href = data.url;
 	} catch (error) {
-		status.innerText = "Network error. Please try again.";
+		setStatus("Network error. Please try again.");
 		setButtonsDisabled(false);
 	}
 }
@@ -221,23 +231,23 @@ function stageText(stage) {
 }
 
 function pollClaim(ticket) {
-	status.innerText = stageText("cloning");
+	setStatus(stageText("cloning"));
 	const poll = setInterval(async () => {
 		try {
 			const response = await fetch(`/api/redeem/${ticket}`);
 			const data = await response.json();
 			if (!response.ok || data.status === "error") {
 				clearInterval(poll);
-				status.innerText = data.detail || "Provisioning failed. Please try again.";
+				setStatus(data.detail || "Provisioning failed. Please try again.");
 				setButtonsDisabled(false);
 				return;
 			}
-			if (data.stage) status.innerText = stageText(data.stage);
+			if (data.stage) setStatus(stageText(data.stage));
 			if (data.status === "ready") {
 				clearInterval(poll);
 				localStorage.setItem("assigned_vm_url", data.url);
 				existingUrl = data.url;
-				status.innerText = "VM ready! Redirecting...";
+				setStatus("VM ready! Redirecting...");
 				window.location.href = data.url;
 			}
 		} catch (error) {}

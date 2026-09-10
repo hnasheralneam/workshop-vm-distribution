@@ -3,23 +3,23 @@
 	<head>
 		<meta charset="UTF-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<title>DawgSec Workshop VM Distribution</title>
+		<title>Claim a Workshop VM</title>
 		<link rel="stylesheet" href="/style.css">
 	</head>
 	<body class="portal">
 		<div class="portal-container card">
-			<h2>DawgSec Workshop VMs</h2>
+			<h2>Workshop Virtual Machines</h2>
 			<p class="subtitle">Claim your personal workshop VM below.</p>
 
 			<div id="claim-buttons">
 				<button id="claim-btn" onclick="handleTerminalAccess()">Claim</button>
 			</div>
-			<button id="code-btn" hidden>Enter pool code</button>
+			<button id="code-btn" hidden>Enter code</button>
 			<p id="status-message"></p>
 		</div>
 
 		<dialog id="code-dialog">
-			<h2>Enter pool code</h2>
+			<h2>Enter code</h2>
 			<form id="code-form">
 				<input id="code-input" type="text" placeholder="e.g. F4LC0N" autocomplete="off" autocapitalize="characters">
 				<p id="code-error"></p>
