@@ -12,37 +12,12 @@
    <h1>DawgSec Workshop Admin</h1>
    <p class="subtitle">Provision and tear down workshop VMs</p>
 
-   <div class="grid">
-      <div class="card">
-         <div class="card-header">
-            <h2>Pools</h2>
-            <button type="button" id="new-deploy-btn">New deployment</button>
-         </div>
-         <div id="redeploy-rows"></div>
+   <div class="card">
+      <div class="card-header">
+         <h2>Pools</h2>
+         <button type="button" id="new-deploy-btn" class="deploy-btn">New deployment</button>
       </div>
-
-      <div class="card">
-         <h2>Destroy VMs</h2>
-         <div class="row">
-            <button class="danger" id="destroy-all-btn">Destroy All</button>
-            <button class="danger" id="destroy-expired-btn">Destroy Expired</button>
-            <button class="danger" id="destroy-selected-btn">Destroy Selected</button>
-            <button class="secondary" id="refresh-pool-btn">Refresh</button>
-         </div>
-         <table>
-            <thead>
-               <tr>
-                  <th></th>
-                  <th>VMID</th>
-                  <th>Pool</th>
-                  <th>Student</th>
-                  <th>Status</th>
-                  <th>Expires</th>
-               </tr>
-            </thead>
-            <tbody id="pool-rows"></tbody>
-         </table>
-      </div>
+      <div id="redeploy-rows"></div>
    </div>
 
    <div class="card job-status">
@@ -51,24 +26,44 @@
       <div id="job-log"></div>
    </div>
 
+   <div class="card">
+      <h2>Virtual Machines</h2>
+      <div class="row" style="float: right; margin-bottom: 2rem;">
+         <button class="danger" id="destroy-all-btn">Destroy All</button>
+         <button class="danger" id="destroy-expired-btn">Destroy Expired</button>
+         <button class="danger" id="destroy-selected-btn">Destroy Selected</button>
+         <button class="secondary" id="refresh-pool-btn">Refresh</button>
+      </div>
+      <table>
+         <thead>
+            <tr>
+               <th></th>
+               <th>VMID</th>
+               <th>Pool</th>
+               <th>VM Name</th>
+               <th>Status</th>
+               <th>Expires</th>
+            </tr>
+         </thead>
+         <tbody id="pool-rows"></tbody>
+      </table>
+   </div>
+
    <dialog id="deploy-dialog">
       <h2 id="deploy-title">New deployment</h2>
       <form id="provision-form">
          <label for="pool_name">Pool name</label>
-         <input id="pool_name" name="pool_name" type="text" placeholder="(optional — defaults to OS label)">
-
-         <label for="pool_code">Pool code</label>
-         <input id="pool_code" name="pool_code" type="text" placeholder="(leave blank to auto-generate)" style="text-transform: uppercase">
+         <input id="pool_name" name="pool_name" type="text" placeholder="Defaults to OS label">
 
          <label for="vm_count">VM count</label>
-         <input id="vm_count" name="vm_count" type="number" min="1" value="5">
+         <input id="vm_count" name="vm_count" type="number" min="1" value="5" required>
 
          <label for="vm_duration_hours">VM duration (hours)</label>
-         <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="0.5" value="2">
+         <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="0.5" value="2" required>
 
-         <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; color: #e6e6e6;">
+         <label>
             <input id="dispenser" type="checkbox" style="width: auto">
-            Dispenser — provision a VM whenever someone loads the pool link and none are free
+            When no free VMs are available in the pool, clone a new one on demand
          </label>
 
          <fieldset>
@@ -80,11 +75,11 @@
                <option value="rdp">RDP (Windows)</option>
             </select>
             <label for="template_vm_id">Template VM ID</label>
-            <input id="template_vm_id" name="template_vm_id" type="number">
+            <input id="template_vm_id" name="template_vm_id" type="number" required>
             <label for="template_vm_username">Template username</label>
-            <input id="template_vm_username" name="template_vm_username" type="text">
+            <input id="template_vm_username" name="template_vm_username" type="text" required>
             <label for="template_vm_password">Template password</label>
-            <input id="template_vm_password" name="template_vm_password" type="password">
+            <input id="template_vm_password" name="template_vm_password" type="password" required>
          </fieldset>
 
          <div class="modal-actions">

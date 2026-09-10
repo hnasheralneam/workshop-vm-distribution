@@ -15,47 +15,80 @@ const deployCancelBtn = document.getElementById("deploy-cancel-btn");
 const dispenserInput = document.getElementById("dispenser");
 
 let pollHandle = null;
+let runningJob = null;
 let editingPool = null;
+const collapsedPools = new Set();
+
+const ICONS = {
+   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
+   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+};
 
 async function loadPool() {
    const res = await fetch("/api/admin/pool");
    if (!res.ok) return;
    const entries = await res.json();
+   const checked = new Set([...poolRows.querySelectorAll("input:checked")].map((el) => el.value));
    poolRows.innerHTML = "";
+   const groups = new Map();
    for (const entry of entries) {
-      const statusLabel = entry.expired ? "expired" : (entry.claimed ? "claimed" : "available");
-      const expiresLabel = entry.expires_at
-         ? new Date(entry.expires_at * 1000).toLocaleString()
-         : "n/a";
-      const tr = document.createElement("tr");
-      const checkCell = document.createElement("td");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.className = "vm-checkbox";
-      checkbox.value = entry.vmid;
-      checkCell.appendChild(checkbox);
-      tr.appendChild(checkCell);
-      for (const value of [entry.vmid, entry.pool ?? "", entry.student_id ?? ""]) {
-         const td = document.createElement("td");
-         td.textContent = value;
-         tr.appendChild(td);
+      if (!groups.has(entry.pool)) groups.set(entry.pool, []);
+      groups.get(entry.pool).push(entry);
+   }
+   for (const [pool, groupEntries] of groups) {
+      const head = document.createElement("tr");
+      head.className = "pool-group";
+      const cell = document.createElement("td");
+      cell.colSpan = 6;
+      cell.textContent = `${collapsedPools.has(pool) ? "▸" : "▾"} ${pool ?? "(no pool)"} (${groupEntries.length})`;
+      head.appendChild(cell);
+      head.addEventListener("click", () => {
+         if (collapsedPools.has(pool)) {
+            collapsedPools.delete(pool);
+         } else {
+            collapsedPools.add(pool);
+         }
+         loadPool();
+      });
+      poolRows.appendChild(head);
+      for (const entry of groupEntries) {
+         const statusLabel = entry.expired ? "expired" : (entry.claimed ? "claimed" : "available");
+         const expiresLabel = entry.expires_at
+            ? new Date(entry.expires_at * 1000).toLocaleString()
+            : "n/a";
+         const tr = document.createElement("tr");
+         const checkCell = document.createElement("td");
+         const checkbox = document.createElement("input");
+         checkbox.type = "checkbox";
+         checkbox.className = "vm-checkbox";
+         checkbox.value = entry.vmid;
+         checkbox.checked = checked.has(checkbox.value);
+         checkCell.appendChild(checkbox);
+         tr.appendChild(checkCell);
+         for (const value of [entry.vmid, entry.pool ?? "", entry.student_id ?? ""]) {
+            const td = document.createElement("td");
+            td.textContent = value;
+            tr.appendChild(td);
+         }
+         const statusCell = document.createElement("td");
+         const pill = document.createElement("span");
+         pill.className = `status-pill status-${statusLabel}`;
+         pill.textContent = statusLabel;
+         statusCell.appendChild(pill);
+         tr.appendChild(statusCell);
+         const expiresCell = document.createElement("td");
+         expiresCell.textContent = expiresLabel;
+         tr.appendChild(expiresCell);
+         if (collapsedPools.has(pool)) tr.classList.add("hidden");
+         poolRows.appendChild(tr);
       }
-      const statusCell = document.createElement("td");
-      const pill = document.createElement("span");
-      pill.className = `status-pill status-${statusLabel}`;
-      pill.textContent = statusLabel;
-      statusCell.appendChild(pill);
-      tr.appendChild(statusCell);
-      const expiresCell = document.createElement("td");
-      expiresCell.textContent = expiresLabel;
-      tr.appendChild(expiresCell);
-      poolRows.appendChild(tr);
    }
 }
 
-function setBusy(busy) {
+function setBusy(busy, kind = "destroy") {
+   runningJob = busy ? kind : null;
    for (const btn of document.querySelectorAll("button")) {
-      btn.disabled = busy;
+      btn.disabled = busy && (kind === "destroy" || btn.classList.contains("deploy-btn"));
    }
 }
 
@@ -82,19 +115,41 @@ async function loadPools() {
    const pools = await res.json();
    redeployRows.innerHTML = "";
    if (pools.length === 0) {
-      redeployRows.textContent = "No pools yet.";
+      redeployRows.textContent = "No pools.";
       return;
    }
    for (const pool of pools) {
-      const row = document.createElement("div");
-      row.className = "row";
-      const label = document.createElement("span");
-      label.textContent = `${pool.name}${pool.config.dispenser ? " — dispenser" : ""}${pool.config.pool_code ? ` — code ${pool.config.pool_code}` : ""} (${pool.available} available)`;
-      const input = document.createElement("input");
-      input.type = "number";
-      input.min = "1";
-      input.value = pool.count;
+      const card = document.createElement("div");
+      card.className = "pool-card";
+      const header = document.createElement("div");
+      header.className = "pool-header";
+      const name = document.createElement("h3");
+      name.textContent = pool.name;
+      const editBtn = document.createElement("button");
+      editBtn.className = "icon-btn";
+      editBtn.title = "Edit";
+      editBtn.setAttribute("aria-label", "Edit");
+      editBtn.innerHTML = ICONS.edit;
+      editBtn.addEventListener("click", () => openDeployModal(pool));
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "icon-btn danger";
+      deleteBtn.title = "Delete";
+      deleteBtn.setAttribute("aria-label", "Delete");
+      deleteBtn.innerHTML = ICONS.trash;
+      deleteBtn.addEventListener("click", () => deletePool(pool));
+      header.append(name, editBtn, deleteBtn);
+      const meta = document.createElement("p");
+      meta.className = "pool-meta";
+      meta.textContent = `${pool.available} available, ${pool.total} total`;
+      card.append(header, meta);
+      const badge = document.createElement("p");
+      badge.className = "pool-badge";
+      badge.textContent = pool.config.dispenser ? "dispenser" : "\u00A0";
+      card.append(badge);
+      const actions = document.createElement("div");
+      actions.className = "pool-actions";
       const copyBtn = document.createElement("button");
+      copyBtn.className = "secondary";
       copyBtn.textContent = "Copy link";
       copyBtn.addEventListener("click", () => {
          const code = pool.config.pool_code ? `?code=${encodeURIComponent(pool.config.pool_code)}` : "";
@@ -102,45 +157,46 @@ async function loadPools() {
          copyBtn.textContent = "Copied!";
          setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
       });
-      const codeBtn = document.createElement("button");
-      codeBtn.className = "secondary";
-      codeBtn.textContent = "Set code";
-      codeBtn.addEventListener("click", async () => {
-         const code = prompt(`Access code for pool "${pool.name}". Leave empty to clear:`, pool.config.pool_code || "");
-         if (code === null) return;
-         const res = await fetch("/api/admin/pool-code", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ pool: pool.name, code })
+      actions.append(copyBtn);
+      if (pool.config.pool_code) {
+         const codeBtn = document.createElement("button");
+         codeBtn.className = "secondary";
+         codeBtn.textContent = `Copy code: ${pool.config.pool_code}`;
+         codeBtn.addEventListener("click", () => {
+            copyToClipboard(pool.config.pool_code);
+            codeBtn.textContent = "Copied!";
+            setTimeout(() => { codeBtn.textContent = `Copy code: ${pool.config.pool_code}`; }, 1500);
          });
-         if (res.ok) loadPools();
-      });
+         actions.append(codeBtn);
+      }
+      const spacer = document.createElement("span");
+      spacer.className = "spacer";
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "1";
+      input.value = pool.count;
       const btn = document.createElement("button");
+      btn.className = "deploy-btn";
+      btn.disabled = runningJob !== null;
       btn.textContent = "Deploy";
       btn.addEventListener("click", () => {
          if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
          startJob("/api/admin/redeploy", { name: pool.name, count: parseInt(input.value, 10) });
       });
-      const editBtn = document.createElement("button");
-      editBtn.textContent = "Edit";
-      editBtn.addEventListener("click", () => openDeployModal(pool));
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "danger";
-      deleteBtn.textContent = "Delete";
-      deleteBtn.addEventListener("click", () => deletePool(pool));
-      row.append(label, input, copyBtn, codeBtn, btn, editBtn, deleteBtn);
-      redeployRows.appendChild(row);
+      actions.append(spacer, input, btn);
+      card.append(actions);
+      redeployRows.appendChild(card);
    }
 }
 
 function openDeployModal(pool) {
    editingPool = pool;
    const passwordField = provisionForm.elements.template_vm_password;
+   passwordField.required = !pool;
    if (pool) {
       deployTitle.textContent = `Edit pool: ${pool.name}`;
       provisionForm.elements.pool_name.value = pool.name;
       provisionForm.elements.pool_name.disabled = true;
-      provisionForm.elements.pool_code.value = pool.config.pool_code ?? "";
       provisionForm.elements.vm_count.value = pool.count;
       provisionForm.elements.vm_duration_hours.value = pool.config.guac_link_ttl_seconds / 3600;
       dispenserInput.checked = !!pool.config.dispenser;
@@ -154,7 +210,6 @@ function openDeployModal(pool) {
       deployTitle.textContent = "New deployment";
       provisionForm.elements.pool_name.disabled = false;
       provisionForm.elements.pool_name.value = "";
-      provisionForm.elements.pool_code.value = "";
       provisionForm.elements.vm_count.value = 5;
       provisionForm.elements.vm_duration_hours.value = 2;
       provisionForm.elements.template_vm_access_method.value = "ssh";
@@ -170,7 +225,7 @@ function openDeployModal(pool) {
 
 async function deletePool(pool) {
    const suffix = pool.available > 0
-      ? ` Its ${pool.available} available VM(s) stay claimable — destroy them from the Destroy card.`
+      ? ` Its ${pool.available} available VMs are not removed`
       : "";
    if (!confirm(`Delete saved config for pool "${pool.name}"?${suffix}`)) return;
    const res = await fetch(`/api/admin/pools/${encodeURIComponent(pool.name)}`, { method: "DELETE" });
@@ -184,6 +239,7 @@ async function pollJob(jobId) {
       clearInterval(pollHandle);
       pollHandle = null;
       jobStatus.textContent = "Job no longer running.";
+      document.querySelector(".job-status").style.display = "none";
       setBusy(false);
       loadPool();
       loadPools();
@@ -206,11 +262,13 @@ async function pollJob(jobId) {
       }
       failures = 0;
       const job = await res.json();
-      jobStatus.textContent = `${job.kind} — ${job.status}`;
+      jobStatus.textContent = `${job.kind}: ${job.status}`;
       jobLog.textContent = job.log.join("\n");
       jobLog.scrollTop = jobLog.scrollHeight;
       if (job.status !== "running") {
          clearInterval(pollHandle);
+         pollHandle = null;
+         document.querySelector(".job-status").style.display = "none";
          setBusy(false);
          loadPool();
          loadPools();
@@ -219,7 +277,8 @@ async function pollJob(jobId) {
 }
 
 async function startJob(url, body) {
-   setBusy(true);
+   setBusy(true, url.includes("destroy") ? "destroy" : "provision");
+   document.querySelector(".job-status").style.display = "block";
    jobStatus.textContent = "Starting...";
    jobLog.textContent = "";
    const res = await fetch(url, {
@@ -304,3 +363,7 @@ refreshPoolBtn.addEventListener("click", loadPool);
 
 loadPool();
 loadPools();
+setInterval(() => {
+   loadPool();
+   loadPools();
+}, 10000);

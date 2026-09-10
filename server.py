@@ -36,7 +36,7 @@ ADMIN_LIMIT = "60/minute"
 
 ticket_lock = threading.Lock()
 job_lock = threading.Lock()
-current_job = None  # keys: id, kind, status, log, started_at, finished_at, error
+jobs = {"provision": None, "destroy": None}
 
 
 @app.errorhandler(RateLimitExceeded)
@@ -101,6 +101,10 @@ def unreserve(entries, vmid):
     return entries
 
 
+def remove_dead_entry(entries, vmid):
+    return [e for e in entries if e["vmid"] != vmid]
+
+
 def finalize_reservation(entries, vmid, url, state):
     for entry in entries:
         if entry["vmid"] == vmid and entry.get("reserved"):
@@ -111,6 +115,79 @@ def finalize_reservation(entries, vmid, url, state):
     return entries
 
 
+def mint_or_prune(entry, ttl, pool_predicate, log_prefix):
+    """Mint a session URL for entry. If its VM was removed externally, prune
+    it from pool.json and retry once against another matching entry."""
+    current = entry
+    for _ in range(2):
+        try:
+            return provision.mint_session_url(current, ttl), current
+        except provision.VMNotFoundError:
+            applog.log.info(
+                f"{log_prefix}: VM {current['vmid']} not found on Proxmox "
+                f"(removed externally); pruned from pool.json"
+            )
+            state = {}
+
+            def prune_and_pick(entries, cur=current, state=state):
+                entries = remove_dead_entry(entries, cur["vmid"])
+                candidates = [e for e in entries if pool_predicate(e)]
+                if candidates:
+                    nxt = random.choice(candidates)
+                    nxt["reserved"] = True
+                    state["next"] = nxt
+                return entries
+
+            poolstore.update(POOL_FILE, prune_and_pick)
+            if "next" not in state:
+                return None, None
+            current = state["next"]
+        except Exception as exc:
+            applog.log.info(f"{log_prefix}: mint failed for VM {current['vmid']}: {exc}")
+            poolstore.update(POOL_FILE, lambda es: unreserve(es, current["vmid"]))
+            return None, None
+    return None, None
+
+
+GHOST_SWEEP_GRACE_SECONDS = 120
+
+
+def proxmox_target_for_pool(pool_name):
+    config = load_configs().get(pool_name) or {}
+    return provision.build_config(config)
+
+
+def sweep_ghost_vms():
+    """Prunes pool.json entries whose VM was removed from Proxmox externally."""
+    entries = poolstore.load(POOL_FILE)
+    eligible = [e for e in entries if time.time() - e.get("created_at", 0) >= GHOST_SWEEP_GRACE_SECONDS]
+
+    by_target = {}
+    for entry in eligible:
+        config = proxmox_target_for_pool(entry.get("pool"))
+        key = (config["proxmox_host"], config["proxmox_node"])
+        by_target.setdefault(key, (config, []))[1].append(entry)
+
+    ghost_vmids = set()
+    for (host, node), (config, target_entries) in by_target.items():
+        try:
+            proxmox = destroy.get_proxmox_client(config)
+            live_vmids = {vm["vmid"] for vm in destroy.list_workshop_vms(proxmox, node)}
+        except Exception as exc:
+            applog.log.info(f"Sweep: could not list live VMs for {host}/{node}: {exc}; skipping this target")
+            continue
+        for entry in target_entries:
+            if entry["vmid"] not in live_vmids:
+                ghost_vmids.add(entry["vmid"])
+
+    if not ghost_vmids:
+        return
+    for vmid in ghost_vmids:
+        applog.log.info(f"Sweep: VM {vmid} not found on Proxmox (removed externally); pruned from pool.json")
+    poolstore.update(POOL_FILE, lambda es: [e for e in es if e["vmid"] not in ghost_vmids])
+    applog.log.info(f"Sweep: pruned {len(ghost_vmids)} ghost VM(s) from pool.json")
+
+
 def reap_expired_vms():
     """Destroys expired VMs; run_teardown also prunes them from pool.json."""
     while True:
@@ -119,18 +196,21 @@ def reap_expired_vms():
             entries = poolstore.load(POOL_FILE)
         except (OSError, json.JSONDecodeError):
             continue
-        if not any(is_expired(entry) for entry in entries):
-            continue
         with job_lock:
-            job_running = current_job is not None and current_job["status"] == "running"
+            job_running = any(j and j["status"] == "running" for j in jobs.values())
         if job_running:
             applog.log.info("Reaper: skipping cycle, an admin job is running")
             continue
+        if any(is_expired(entry) for entry in entries):
+            try:
+                results = destroy.run_teardown(destroy.build_config(), mode="expired")
+                applog.log.info(f"Reaper: destroyed {len(results)} expired VM(s)")
+            except Exception as exc:
+                applog.log.info(f"Reaper: teardown failed, will retry next cycle: {exc}")
         try:
-            results = destroy.run_teardown(destroy.build_config(), mode="expired")
-            applog.log.info(f"Reaper: destroyed {len(results)} expired VM(s)")
+            sweep_ghost_vms()
         except Exception as exc:
-            applog.log.info(f"Reaper: teardown failed, will retry next cycle: {exc}")
+            applog.log.info(f"Sweep: failed, will retry next cycle: {exc}")
 
 
 @app.route("/")
@@ -206,14 +286,19 @@ def claim():
         return jsonify(status="provisioning", ticket=ticket, pool=requested_pool), 202
 
     entry = state["entry"]
-    try:
-        url = provision.mint_session_url(entry, entry_ttl(entry))
-    except Exception as exc:
-        applog.log.info(f"Claim: mint failed for VM {entry['vmid']}: {exc}")
-        poolstore.update(POOL_FILE, lambda es: unreserve(es, entry["vmid"]))
+
+    def predicate(e):
+        if not is_available(e):
+            return False
+        if requested_pool:
+            return display_name(e) == requested_pool
+        return not requested_os or os_type(e) == requested_os
+
+    url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
+    if url is None:
         return jsonify(detail="VM is not reachable right now. Please contact your instructor."), 502
 
-    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, entry["vmid"], url, state))
+    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
     return jsonify(url=url)
 
 
@@ -255,14 +340,17 @@ def validate():
         return jsonify(valid=False, expired=True)
 
     replacement = state["entry"]
-    try:
-        fresh = provision.mint_session_url(replacement, entry_ttl(replacement))
-    except Exception as exc:
-        applog.log.info(f"Validate: replacement mint failed for VM {replacement['vmid']}: {exc}")
-        poolstore.update(POOL_FILE, lambda es: unreserve(es, replacement["vmid"]))
+    expired_name = display_name(replacement)
+    expired_os = os_type(replacement)
+
+    def predicate(e):
+        return is_available(e) and (display_name(e) == expired_name or os_type(e) == expired_os)
+
+    fresh, final_entry = mint_or_prune(replacement, entry_ttl(replacement), predicate, "Validate")
+    if fresh is None:
         return jsonify(valid=False, expired=True, detail="Could not prepare a replacement machine. Please try again.")
 
-    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, replacement["vmid"], fresh, state))
+    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], fresh, state))
     if not state.get("done"):
         return jsonify(valid=False, expired=True)
     return jsonify(valid=False, expired=True, url=fresh)
@@ -285,6 +373,13 @@ def reconnect():
         return jsonify(valid=False, expired=True), 410
     try:
         fresh = provision.mint_session_url(entry, entry_ttl(entry))
+    except provision.VMNotFoundError:
+        applog.log.info(
+            f"Reconnect: VM {entry['vmid']} not found on Proxmox "
+            f"(removed externally); pruned from pool.json"
+        )
+        poolstore.update(POOL_FILE, lambda es: remove_dead_entry(es, entry["vmid"]))
+        return jsonify(valid=False, expired=True)
     except Exception as exc:
         applog.log.info(f"Reconnect: mint failed for VM {entry['vmid']}: {exc}")
         return jsonify(valid=False, detail="VM is not reachable right now. Please try again."), 502
@@ -377,7 +472,9 @@ def run_redeem_provision(ticket, config):
 
     try:
         config = provision.build_config(config)
-        student_id = f"student-{uuid.uuid4().hex[:6]}"
+        output_file = config["url_output_file"]
+        entries = poolstore.load(output_file) if output_file and os.path.exists(output_file) else []
+        student_id = provision.next_student_id(config["pool_name"], entries)
         vmid, student_id, url, expires_at = provision.provision_one(config, student_id, log)
         set_ticket(ticket, stage="adding")
         entry = {
@@ -390,6 +487,7 @@ def run_redeem_provision(ticket, config):
             "pool": config["pool_name"],
             "template_vm_username": config["template_vm_username"],
             "template_vm_password": config["template_vm_password"],
+            "created_at": time.time(),
         }
         provision.append_pool_entries(config["url_output_file"], [entry])
         set_ticket(ticket, status="ready", url=url)
@@ -427,13 +525,14 @@ def redeem():
     poolstore.update(POOL_FILE, reserve)
     if "entry" in state:
         entry = state["entry"]
-        try:
-            url = provision.mint_session_url(entry, entry_ttl(entry))
-        except Exception as exc:
-            applog.log.info(f"Redeem: mint failed for VM {entry['vmid']}: {exc}")
-            poolstore.update(POOL_FILE, lambda es: unreserve(es, entry["vmid"]))
+
+        def predicate(e):
+            return is_available(e) and display_name(e) == pool_name
+
+        url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Redeem")
+        if url is None:
             return jsonify(detail="VM is not reachable right now. Please try again."), 502
-        poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, entry["vmid"], url, state))
+        poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
         return jsonify(status="ready", url=url, pool=pool_name)
 
     ticket = str(uuid.uuid4())
@@ -475,10 +574,10 @@ def job_log_appender(job):
 
 
 def start_job(kind, target, *target_args):
-    """Runs target(*target_args, log=...) in a background thread. Only one job at a time."""
-    global current_job
+    """Runs target(*target_args, log=...) in a background thread. One job per kind."""
     with job_lock:
-        if current_job is not None and current_job["status"] == "running":
+        job = jobs[kind]
+        if job is not None and job["status"] == "running":
             return None
         job = {
             "id": str(uuid.uuid4()),
@@ -489,7 +588,7 @@ def start_job(kind, target, *target_args):
             "finished_at": None,
             "error": None,
         }
-        current_job = job
+        jobs[kind] = job
 
     def runner():
         try:
@@ -546,8 +645,7 @@ def admin_provision():
     count = config["vm_count"]
 
     def save(configs):
-        if not config.get("pool_code"):
-            config["pool_code"] = generate_pool_code({c.get("pool_code") for c in configs.values()})
+        config["pool_code"] = generate_pool_code({c.get("pool_code") for c in configs.values()})
         configs[config_pool_name(config)] = config
         return configs
 
@@ -555,7 +653,7 @@ def admin_provision():
 
     job = start_job("provision", provision.run_parallel_provisioning, config, count)
     if job is None:
-        return jsonify(detail="A job is already running."), 409
+        return jsonify(detail="A provision job is already running."), 409
     return jsonify(job_id=job["id"])
 
 
@@ -564,15 +662,18 @@ def admin_provision():
 @admin_required
 def admin_pools():
     configs = load_configs()
-    available = {}
+    counts = {}
     for entry in poolstore.load(POOL_FILE):
+        name = display_name(entry)
+        info = counts.setdefault(name, [0, 0])
+        info[0] += 1
         if is_available(entry):
-            name = display_name(entry)
-            available[name] = available.get(name, 0) + 1
+            info[1] += 1
     pools = [
         {
             "name": name,
-            "available": available.get(name, 0),
+            "available": counts.get(name, [0, 0])[1],
+            "total": counts.get(name, [0, 0])[0],
             "count": cfg.get("vm_count", 5),
             "config": {k: v for k, v in cfg.items() if k not in provision.SECRET_FIELDS},
         }
@@ -590,7 +691,7 @@ def admin_update_pool(name):
     if saved is None:
         return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
 
-    overrides = {k: v for k, v in body.items() if k != "pool_name" and v not in (None, "")}
+    overrides = {k: v for k, v in body.items() if k not in ("pool_name", "pool_code") and v not in (None, "")}
     try:
         config = provision.build_config({**saved, **overrides})
         provision.require_template_fields(config)
@@ -627,29 +728,6 @@ def admin_delete_pool(name):
     if not state.get("done"):
         return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
     return jsonify(deleted=name)
-
-
-@app.route("/api/admin/pool-code", methods=["POST"])
-@limiter.limit(ADMIN_LIMIT)
-@admin_required
-def admin_pool_code():
-    body = request.get_json(silent=True) or {}
-    name = body.get("pool")
-    code = (body.get("code") or "").strip().upper()
-    if code and not code.isascii():
-        return jsonify(detail="Pool code must use letters and numbers."), 400
-    state = {}
-
-    def set_code(configs):
-        if name in configs:
-            configs[name]["pool_code"] = code
-            state["done"] = True
-        return configs
-
-    poolstore.update(CONFIGS_FILE, set_code, dict)
-    if not state.get("done"):
-        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
-    return jsonify(pool=name, code=code)
 
 
 @app.route("/api/admin/redeploy", methods=["POST"])
@@ -691,7 +769,7 @@ def admin_redeploy():
 
     job = start_job("provision", provision.run_parallel_provisioning, config, count)
     if job is None:
-        return jsonify(detail="A job is already running."), 409
+        return jsonify(detail="A provision job is already running."), 409
     return jsonify(job_id=job["id"])
 
 
@@ -711,7 +789,7 @@ def admin_destroy():
     config = destroy.build_config()
     job = start_job("destroy", destroy.run_teardown, config, mode, vmids)
     if job is None:
-        return jsonify(detail="A job is already running."), 409
+        return jsonify(detail="A destroy job is already running."), 409
     return jsonify(job_id=job["id"])
 
 
@@ -721,9 +799,15 @@ def admin_destroy():
 @admin_required
 def admin_job(job_id=None):
     with job_lock:
-        if current_job is None or (job_id and current_job["id"] != job_id):
+        candidates = [j for j in jobs.values() if j]
+        job = next((j for j in candidates if job_id and j["id"] == job_id), None)
+        if job is None and not job_id:
+            job = next((j for j in candidates if j["status"] == "running"), None)
+            if job is None:
+                job = max(candidates, key=lambda j: j["started_at"], default=None)
+        if job is None:
             return jsonify(detail="No such job."), 404
-        job_snapshot = {k: v for k, v in current_job.items()}
+        job_snapshot = {k: v for k, v in job.items()}
     return jsonify(job_snapshot)
 
 
