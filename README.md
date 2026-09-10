@@ -23,7 +23,7 @@ Edit `.env` with your Proxmox and Guacamole details:
 - `GUACAMOLE_URL`, `GUACAMOLE_INTERNAL_URL`, `GUACAMOLE_KEY`
 - `URL_OUTPUT_FILE`, `ADMIN_PASSWORD`, `LOG_FILE`
 
-Template VM id/username/password, access method, VM count, and link duration aren't in `.env` — they're entered per pool, either in the admin "New deployment" form or interactively when running `provision.py` directly.
+Template VM id/username/password, access method, VM count, and link duration aren't in `.env`; they're entered per pool, either in the admin "New deployment" form or interactively when running `provision.py` directly.
 
 ## CLI Usage
 1. Provision VMs (writes `pool.json`; prompts for access method, template VM id/username/password, VM count, and link TTL):
@@ -34,19 +34,20 @@ Template VM id/username/password, access method, VM count, and link duration are
    ```bash
    gunicorn -w 1 --threads "$(( $(nproc) > 2 ? $(nproc) - 1 : $(nproc) ))" -b 0.0.0.0:5000 server:app
    ```
-   `-w 1` is required: pool/job state and the VM-reaper thread live in process memory, so extra worker processes would each keep their own out-of-sync copy. `--threads` gives concurrency within that one process instead (cores − 1 above 2 cores, otherwise all cores, so this also works on single- and dual-core systems). (`python server.py` still works for quick local testing, but runs Flask's unhardened dev server.)
-   To provision a whole fresh host instead, `sudo bash deploy/setup.sh` (flags + env overrides in the script header) installs the Guacamole docker stack, clones + sets up the app, writes `.env`, and installs `deploy/workshop-vm.service` — a `workshop-vm` systemd service whose `ExecStart` is `deploy/run.sh`, the gunicorn command above resolving paths from its own location. Run the portal by hand with `deploy/run.sh`.
-3. Tear down all workshop VMs when done (interactive confirmation, only removes `workshop-` prefixed VMs):
+   `-w 1` is required: pool/job state and the VM-reaper thread live in process memory, so extra worker processes would each keep their own out-of-sync copy. `--threads` gives concurrency within that one process instead (cores − 1 above 2 cores, otherwise all cores). (`python server.py` still works for quick local testing, but runs Flask's unhardened dev server.)
+3. Tear down workshop VMs when done (interactive confirmation, only removes `workshop-`-prefixed VMs that are still tracked in `pool.json`):
    ```bash
    python destroy.py
    ```
 
+## Deployment
+You can deploy the whole stack with the deploy script: `sudo bash deploy/setup.sh` (override defaults like `APP_DIR`, `PROXMOX_URL`, or `PORT` via env vars). It installs the Guacamole docker stack, clones and sets up the app, writes `.env`, and installs `deploy/workshop-vm.service`, a `workshop-vm` systemd service that runs the portal via `deploy/run.sh` (the gunicorn command above).
+
 ## Student portal
-`http://0.0.0.0:5000` shows one button per saved pool (plus any legacy pool.json entries); picking one claims a random free VM from that pool and redirects to its Guacamole session — and when the pool has none free, a fresh VM is provisioned on the spot while the page shows progress, then redirects. Codes don't gate anything here: a pool with a code is listed and claimable exactly like any other. The "Enter pool code" button is just an alternate way to claim — type a pool's code and you get a machine from that pool without picking it by name. The page remembers the assigned machine, so Reconnect re-opens it with a fresh session token, and an expired machine is swapped for a free replacement on the next visit.
+The main page shows one card per saved pool; picking one claims a free VM from that pool and redirects to its Guacamole session. For dispenser pools, when a claim link is loaded and the pool has none free, a fresh VM is provisioned on the spot while the page shows progress, then redirects. The "Enter pool code" button is an alternate way to claim: type a pool's code and you get a machine from that pool without picking it by name. Pools with no free vms that are not dispensers have their claim buttons disabled. The page remembers the assigned machine, so Reconnect re-opens it with a fresh session token, and an expired machine is swapped for a free replacement on the next visit.
 
 ## Admin portal
-`http://0.0.0.0:5000/admin` provides a web UI for provisioning and destroying VMs without touching the CLI — set `ADMIN_PASSWORD` in `.env` to protect it (HTTP Basic Auth). From there you can kick off a provisioning run with overridden settings (template, access method, VM count, VM duration, etc.), destroy all/expired/selected VMs, and watch job progress and the live pool table. Each run is saved as a named pool (in `configs.json`) that you can redeploy with one click, reconfigure, or delete from the deploy dialog. Every pool also gets a 5-character claim code (auto-generated, editable in the same dialog) that students can enter on the portal to claim from that pool — codes are a claim shortcut, not a lock, so coded pools still appear in the public pool list and their `/claim/<pool>` links work with or without the code — opening one claims a VM from that pool immediately, and anyone who already holds a machine is warned that claiming a new one deletes their current one right away. The deploy dialog also has a Dispenser checkbox: a dispenser pool provisions a fresh VM whenever someone loads its claim link and the pool has none free (uncapped). Pools saved before this option existed are migrated to dispensers on the next server start; uncheck the box in the edit dialog to keep a pool claim-only.
+The admin page provides a web UI for provisioning and destroying VMs. You can set the `ADMIN_PASSWORD` in `.env`. On that page you can provision pools with custom configs (template, access method, VM count, VM duration, etc.), destroy all/expired/selected VMs, and watch job progress, as well as see the live pool table. Each run is saved as a named pool (in `configs.json`) that you can redeploy with one click, reconfigure, or delete from the deploy dialog. Every pool also gets a 5-character claim code that students can enter on the portal to claim from that pool. The deploy dialog also has a Dispenser checkbox: a dispenser pool provisions a fresh VM whenever someone loads its claim link and the pool has none free.
 
 ## Notes
-Make sure you don't have any important vms named workshop-* in your proxmox! `destroy.py` will delete them.
-State lives in `pool.json` (claims + per-VM credentials) and `configs.json` (saved pools); both are gitignored and written with `0600` permissions. Server, provisioning, and teardown output also goes to `server.log` (gitignored, `0600`, rotates at 5 MB with 2 backups; set `LOG_FILE` to change the location) while still printing to the console.
+State lives in `pool.json` (claims + per-VM credentials) and `configs.json` (saved pools); both are gitignored. Server, provisioning, and teardown output also goes to `server.log`; set `LOG_FILE` to change the location.

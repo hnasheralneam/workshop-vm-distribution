@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision the DawgSec guacamole 1.6.0 through docker, sets up its json extension, then sets up and starts workshop-vm as a systemd service.
+# Provision guacamole 1.6.0 through Docker, sets up its json extension, then sets up and starts workshop-vm as a systemd service.
 # Run with sudo
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
