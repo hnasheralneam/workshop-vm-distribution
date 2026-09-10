@@ -4,6 +4,7 @@ import hmac
 import hashlib
 import base64
 import uuid
+import threading
 import concurrent.futures
 import socket
 import requests
@@ -266,14 +267,26 @@ def pool_slug(pool_name):
     return slug or "pool"
 
 
-def next_student_id(pool_name, entries):
+student_id_lock = threading.Lock()
+student_id_counters = {}
+
+
+def allocate_student_ids(pool_name, pool_file, count):
     slug = pool_slug(pool_name)
-    nums = []
-    for e in entries:
-        head, _, tail = e.get("student_id", "").rpartition("-")
-        if head == slug and tail.isdigit():
-            nums.append(int(tail))
-    return f"{slug}-{max(nums, default=0) + 1}"
+    with student_id_lock:
+        if slug not in student_id_counters:
+            entries = poolstore.load(pool_file) if pool_file and os.path.exists(pool_file) else []
+            nums = []
+            for e in entries:
+                head, _, tail = e.get("student_id", "").rpartition("-")
+                if head == slug and tail.isdigit():
+                    nums.append(int(tail))
+            student_id_counters[slug] = max(nums, default=0)
+        ids = []
+        for _ in range(count):
+            student_id_counters[slug] += 1
+            ids.append(f"{slug}-{student_id_counters[slug]}")
+        return ids
 
 
 def provision_one(config, student_id, log=applog.log.info):
@@ -288,6 +301,7 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
 
     log(f"\n--- Pre-allocating {count} VMIDs ---")
     used_vmids = {vm["vmid"] for vm in proxmox.nodes(config["proxmox_node"]).qemu.get()}
+    student_ids = allocate_student_ids(config["pool_name"], config["url_output_file"], count)
     tasks = []
     candidate_vmid = int(proxmox.cluster.nextid.get())
 
@@ -298,9 +312,8 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
         used_vmids.add(target_vmid)
         candidate_vmid += 1
 
-        student_id = f"{pool_slug(config['pool_name'])}-{i+1}"
-        tasks.append((target_vmid, student_id))
-        log(f"Allocated {target_vmid} to {student_id}")
+        tasks.append((target_vmid, student_ids[i]))
+        log(f"Allocated {target_vmid} to {student_ids[i]}")
 
     log(f"\n--- Firing off Proxmox Clones in Parallel ---")
     results = []

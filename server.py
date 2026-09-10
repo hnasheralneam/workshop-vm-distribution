@@ -146,6 +146,7 @@ def mint_or_prune(entry, ttl, pool_predicate, log_prefix):
             applog.log.info(f"{log_prefix}: mint failed for VM {current['vmid']}: {exc}")
             poolstore.update(POOL_FILE, lambda es: unreserve(es, current["vmid"]))
             return None, None
+    poolstore.update(POOL_FILE, lambda es: unreserve(es, current["vmid"]))
     return None, None
 
 
@@ -159,8 +160,9 @@ def proxmox_target_for_pool(pool_name):
 
 def sweep_ghost_vms():
     """Prunes pool.json entries whose VM was removed from Proxmox externally."""
+    configs = load_configs()
     entries = poolstore.load(POOL_FILE)
-    eligible = [e for e in entries if time.time() - e.get("created_at", 0) >= GHOST_SWEEP_GRACE_SECONDS]
+    eligible = [e for e in entries if e.get("pool") in configs and time.time() - e.get("created_at", 0) >= GHOST_SWEEP_GRACE_SECONDS]
 
     by_target = {}
     for entry in eligible:
@@ -470,9 +472,7 @@ def run_redeem_provision(ticket, config):
 
     try:
         config = provision.build_config(config)
-        output_file = config["url_output_file"]
-        entries = poolstore.load(output_file) if output_file and os.path.exists(output_file) else []
-        student_id = provision.next_student_id(config["pool_name"], entries)
+        student_id = provision.allocate_student_ids(config["pool_name"], config["url_output_file"], 1)[0]
         vmid, student_id, url, expires_at = provision.provision_one(config, student_id, log)
         set_ticket(ticket, stage="adding")
         entry = {
