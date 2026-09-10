@@ -8,6 +8,7 @@ import concurrent.futures
 import socket
 import requests
 import os
+import re
 from pathlib import Path
 
 import applog
@@ -33,6 +34,16 @@ TEMPLATE_FIELDS = {
     "vm_count",
     "guac_link_ttl_seconds",
 }
+
+
+class VMNotFoundError(RuntimeError):
+    pass
+
+
+def _looks_like_missing_vm(exc):
+    status = getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    return status == 500 and ("does not exist" in text or "no such" in text)
 
 VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
@@ -250,6 +261,21 @@ def append_pool_entries(output_file, entries):
     return poolstore.update(output_file, lambda pool: pool + entries)
 
 
+def pool_slug(pool_name):
+    slug = re.sub(r"[^a-z0-9]+", "-", (pool_name or "").lower()).strip("-")
+    return slug or "pool"
+
+
+def next_student_id(pool_name, entries):
+    slug = pool_slug(pool_name)
+    nums = []
+    for e in entries:
+        head, _, tail = e.get("student_id", "").rpartition("-")
+        if head == slug and tail.isdigit():
+            nums.append(int(tail))
+    return f"{slug}-{max(nums, default=0) + 1}"
+
+
 def provision_one(config, student_id, log=applog.log.info):
     proxmox = get_proxmox_client(config)
     vmid = int(proxmox.cluster.nextid.get())
@@ -272,7 +298,7 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
         used_vmids.add(target_vmid)
         candidate_vmid += 1
 
-        student_id = f"student-{i+1}"
+        student_id = f"{pool_slug(config['pool_name'])}-{i+1}"
         tasks.append((target_vmid, student_id))
         log(f"Allocated {target_vmid} to {student_id}")
 
@@ -296,7 +322,7 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
 
     if results:
         log("\n=== ALL WORKSHOP VMS PROVISIONED ===")
-        results.sort(key=lambda x: int(x[1].split('-')[1]))
+        results.sort(key=lambda x: int(x[1].rsplit('-', 1)[1]))
         for _, student, url, _ in results:
             log(f"{student}) {url}")
     else:
@@ -308,7 +334,8 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
         {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e,
          "access_method": access_method, "pool": config["pool_name"],
          "template_vm_username": config["template_vm_username"],
-         "template_vm_password": config["template_vm_password"]}
+         "template_vm_password": config["template_vm_password"],
+         "created_at": time.time()}
         for v, s, u, e in results
     ]
     full_pool = append_pool_entries(pool_output_file, new_entries)
@@ -354,7 +381,9 @@ def mint_session_url(entry, guac_link_ttl_seconds, log=applog.log.info):
     try:
         status = proxmox.nodes(config["proxmox_node"]).qemu(vmid).status.current.get()
     except Exception as exc:
-        raise RuntimeError(f"VM {vmid} not found on Proxmox: {exc}")
+        if _looks_like_missing_vm(exc):
+            raise VMNotFoundError(f"VM {vmid} not found on Proxmox: {exc}") from exc
+        raise RuntimeError(f"VM {vmid} status check failed: {exc}") from exc
     if status.get("status") != "running":
         raise RuntimeError(f"VM {vmid} is not running (status={status.get('status')})")
     vm_ip = get_vm_ip(proxmox, config, vmid, timeout=RECONNECT_IP_TIMEOUT)

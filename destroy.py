@@ -15,6 +15,11 @@ load_dotenv()
 WORKSHOP_PREFIX = "workshop-"
 
 
+def list_workshop_vms(proxmox, node):
+    all_vms = proxmox.nodes(node).qemu.get()
+    return [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX)]
+
+
 def destroy_worker(proxmox, node_name, vmid, vm_name, log):
     node = proxmox.nodes(node_name)
 
@@ -65,8 +70,7 @@ def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
 
     log(f"\n--- Scanning for VMs with prefix '{WORKSHOP_PREFIX}' ---")
 
-    all_vms = proxmox.nodes(config["proxmox_node"]).qemu.get()
-    target_vms = [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX)]
+    target_vms = list_workshop_vms(proxmox, config["proxmox_node"])
 
     pool = load_pool(pool_output_file)
 
@@ -78,7 +82,8 @@ def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
         expired_vmids = {entry['vmid'] for entry in pool if entry.get('expires_at') is not None and entry['expires_at'] < now}
         target_vms = [vm for vm in target_vms if vm.get('vmid') in expired_vmids]
     else:
-        pass
+        tracked_vmids = {entry['vmid'] for entry in pool}
+        target_vms = [vm for vm in target_vms if vm.get('vmid') in tracked_vmids]
 
     if not target_vms:
         log("No matching workshop VMs found. Nothing to destroy!")
