@@ -27,10 +27,11 @@ GUAC_JSON_KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-3
 PROXMOX_URL="${PROXMOX_URL:-10.0.0.150}"
 PROXMOX_USER="${PROXMOX_USER:-root@pam}"
 PROXMOX_SOURCE_NODE="${PROXMOX_SOURCE_NODE:-proxmox}"
+PROXMOX_TOKEN_NAME="${PROXMOX_TOKEN_NAME:-}"
+PROXMOX_TOKEN_SECRET="${PROXMOX_TOKEN_SECRET:-}"
 
 # Guacamole url is used to mint tokens, the public url is for students
 INTERNAL_GUAC_URL="${INTERNAL_GUAC_URL:-http://127.0.0.1:8080/guacamole}"
-PUBLIC_GUAC_URL_PRESET="${PUBLIC_GUAC_URL:-}"
 PUBLIC_GUAC_URL="${PUBLIC_GUAC_URL:-http://127.0.0.1:8080/guacamole}"
 
 # Random admin password
@@ -44,6 +45,18 @@ PORT="${PORT:-5000}"
 mkdir -p "$APP_DIR" "$GUAC_STACK_DIR"
 
 log() { echo "==> $*"; }
+
+ask_var() {
+  local name="$1" label="$2" secret="${3:-}" input="" prompt="$label"
+  [[ -t 0 ]] || return 0
+  if [[ -n "$secret" ]]; then
+    read -rs -p "$prompt: " input; echo
+  else
+    [[ -n "${!name:-}" ]] && prompt="$label [${!name}]"
+    read -r -p "$prompt: " input
+  fi
+  [[ -n "$input" ]] && printf -v "$name" '%s' "$input"
+}
 
 # ---------------------------------------------------------------------------
 # 01 · system packages: docker + compose + auth-json zip + python venv
@@ -155,10 +168,16 @@ module_systemd() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-# Ask for the public Guacamole URL, unless there's no TTY
-if [[ -z "$PUBLIC_GUAC_URL_PRESET" && -t 0 ]]; then
-  read -r -p "Public Guacamole base URL for students [$PUBLIC_GUAC_URL]: " host_input
-  if [[ -n "$host_input" ]]; then PUBLIC_GUAC_URL="$host_input"; fi
+ask_var PROXMOX_URL "Proxmox host"
+ask_var PROXMOX_USER "Proxmox user"
+ask_var PROXMOX_TOKEN_NAME "Proxmox API token name (part after ! in the token ID)"
+ask_var PROXMOX_TOKEN_SECRET "Proxmox API token secret" secret
+ask_var PROXMOX_SOURCE_NODE "Proxmox node"
+ask_var PUBLIC_GUAC_URL "Public Guacamole base URL for students"
+
+if [[ -z "$PROXMOX_TOKEN_NAME" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
+  echo "PROXMOX_TOKEN_NAME and PROXMOX_TOKEN_SECRET are required (export them or run interactively)" >&2
+  exit 1
 fi
 
 module_system_pkgs
