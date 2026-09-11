@@ -122,6 +122,7 @@ async function loadPools() {
    for (const pool of pools) {
       const card = document.createElement("div");
       card.className = "pool-card";
+      card.dataset.pool = pool.name;
       const header = document.createElement("div");
       header.className = "pool-header";
       const name = document.createElement("h3");
@@ -188,6 +189,18 @@ async function loadPools() {
       actions.append(spacer, input, btn);
       card.append(actions);
       redeployRows.appendChild(card);
+   }
+}
+
+async function updatePoolStats() {
+   const res = await fetch("/api/admin/pools");
+   if (!res.ok) return;
+   const pools = await res.json();
+   for (const pool of pools) {
+      const card = redeployRows.querySelector(`[data-pool="${CSS.escape(pool.name)}"]`);
+      if (!card) continue;
+      card.querySelector(".pool-meta").textContent = `${pool.available} available, ${pool.total} total`;
+      card.querySelector(".deploy-btn").disabled = runningJob !== null;
    }
 }
 
@@ -370,5 +383,5 @@ loadPool();
 loadPools();
 setInterval(() => {
    loadPool();
-   loadPools();
+   updatePoolStats();
 }, 10000);
