@@ -413,6 +413,10 @@ body.portal #claim-buttons button:active:not(:disabled) {
 	transform: scale(0.99);
 }
 
+body.portal #claim-progress {
+	margin-top: 1rem;
+}
+
 body.portal #vms-heading {
 	margin: 0 0 0.5rem;
 	font-size: 0.9rem;
@@ -447,6 +451,15 @@ body.portal .vm-label {
 	white-space: nowrap;
 }
 
+body.portal .vm-expiry {
+	display: block;
+	margin-top: 0.15rem;
+	font-size: 0.72rem;
+	font-weight: 400;
+	color: var(--text-faint);
+	white-space: normal;
+}
+
 body.portal .vm-actions {
 	display: flex;
 	gap: 0.4rem;
@@ -469,6 +482,14 @@ body.portal #status-message {
 	min-height: 1.2em;
 	font-size: 0.9rem;
 	color: var(--text-muted);
+}
+
+body.portal #status-message.error {
+	color: var(--danger);
+}
+
+body.portal #status-message.success {
+	color: var(--accent);
 }
 
 body.portal #code-btn {
@@ -498,6 +519,37 @@ body.portal #code-btn:hover:not(:disabled) {
 }
 
 #code-error {
+	color: var(--danger);
+	font-size: 0.85rem;
+	margin: 0.5rem 0 0;
+	min-height: 1em;
+}
+
+#swap-options {
+	margin-top: 0.75rem;
+	text-align: left;
+}
+
+#swap-options .swap-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	background: var(--bg-inset);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 0.45rem 0.75rem;
+	margin-bottom: 0.5rem;
+}
+
+#swap-options .swap-row button {
+	margin: 0;
+	padding: 0.4rem 0.7rem;
+	font-size: 0.8rem;
+	background: var(--danger);
+}
+
+#swap-error {
 	color: var(--danger);
 	font-size: 0.85rem;
 	margin: 0.5rem 0 0;

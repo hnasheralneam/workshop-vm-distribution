@@ -17,14 +17,17 @@
 			<div id="claim-buttons">
 				<button id="claim-btn" onclick="handleTerminalAccess()">Claim</button>
 			</div>
+			<div id="claim-progress" hidden>
+				<div class="spinner"></div>
+			</div>
 			<button id="code-btn" hidden>Enter code</button>
-			<p id="status-message"></p>
+			<p id="status-message" role="status" aria-live="polite"></p>
 		</div>
 
 		<dialog id="code-dialog">
 			<h2>Enter code</h2>
 			<form id="code-form">
-				<input id="code-input" type="text" placeholder="e.g. F4LC0N" autocomplete="off" autocapitalize="characters">
+				<input id="code-input" type="text" placeholder="e.g. F4LC0N" aria-label="Code" autocomplete="off" autocapitalize="characters">
 				<p id="code-error"></p>
 				<div class="modal-actions">
 					<button type="button" class="secondary" id="code-cancel-btn">Cancel</button>
@@ -34,6 +37,16 @@
 			<div id="code-progress" hidden>
 				<div class="spinner"></div>
 				<p id="code-stage"></p>
+			</div>
+		</dialog>
+
+		<dialog id="swap-dialog">
+			<h2>Release a machine?</h2>
+			<p class="subtitle">You already have 2 machines. Release one to claim another.</p>
+			<div id="swap-options"></div>
+			<p id="swap-error"></p>
+			<div class="modal-actions">
+				<button type="button" class="secondary" id="swap-cancel-btn">Cancel</button>
 			</div>
 		</dialog>
 

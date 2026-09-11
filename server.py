@@ -284,8 +284,12 @@ def claim():
 
     poolstore.update(POOL_FILE, reserve)
     if "entry" not in state:
-        config = load_configs().get(requested_pool or "")
+        config = configs.get(requested_pool or "")
         if not config or not config.get("dispenser"):
+            if requested_pool and requested_pool not in configs:
+                return jsonify(detail=f"Unknown pool {requested_pool!r}."), 404
+            if requested_pool:
+                return jsonify(detail=f"No VMs available in pool {requested_pool!r} right now."), 404
             return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
         ticket = str(uuid.uuid4())
         with ticket_lock:
@@ -307,7 +311,7 @@ def claim():
         return jsonify(detail="VM is not reachable right now. Please contact your instructor."), 502
 
     poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
-    return jsonify(url=url)
+    return jsonify(url=url, expires_at=final_entry.get("expires_at"))
 
 
 @app.route("/api/validate", methods=["POST"])
@@ -322,7 +326,7 @@ def validate():
     if not entry.get("claimed"):
         return jsonify(valid=False, expired=is_expired(entry))
     if not is_expired(entry):
-        return jsonify(valid=True)
+        return jsonify(valid=True, expires_at=entry.get("expires_at"))
 
     state = {}
 
@@ -361,7 +365,7 @@ def validate():
     poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], fresh, state))
     if not state.get("done"):
         return jsonify(valid=False, expired=True)
-    return jsonify(valid=False, expired=True, url=fresh)
+    return jsonify(valid=False, expired=True, url=fresh, expires_at=final_entry.get("expires_at"))
 
 
 @app.route("/api/reconnect", methods=["POST"])
@@ -404,7 +408,7 @@ def reconnect():
     poolstore.update(POOL_FILE, finalize)
     if not state.get("done"):
         return jsonify(valid=False), 404
-    return jsonify(valid=True, url=fresh)
+    return jsonify(valid=True, url=fresh, expires_at=entry.get("expires_at"))
 
 
 @app.route("/api/release", methods=["POST"])
@@ -500,7 +504,7 @@ def run_redeem_provision(ticket, config):
             "created_at": time.time(),
         }
         provision.append_pool_entries(config["url_output_file"], [entry])
-        set_ticket(ticket, status="ready", url=url)
+        set_ticket(ticket, status="ready", url=url, expires_at=expires_at)
     except Exception as exc:
         applog.log.info(f"Redeem provisioning failed: {exc}")
         if vmid is not None:
@@ -543,7 +547,7 @@ def redeem():
         if url is None:
             return jsonify(detail="VM is not reachable right now. Please try again."), 502
         poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
-        return jsonify(status="ready", url=url, pool=pool_name)
+        return jsonify(status="ready", url=url, pool=pool_name, expires_at=final_entry.get("expires_at"))
 
     ticket = str(uuid.uuid4())
     with ticket_lock:
@@ -803,6 +807,32 @@ def admin_destroy():
     if job is None:
         return jsonify(detail="A destroy job is already running."), 409
     return jsonify(job_id=job["id"])
+
+
+@app.route("/api/admin/extend", methods=["POST"])
+@limiter.limit(ADMIN_LIMIT)
+@admin_required
+def admin_extend():
+    body = request.get_json(silent=True) or {}
+    hours = body.get("hours")
+    if not isinstance(hours, int) or isinstance(hours, bool):
+        return jsonify(detail="hours must be an integer."), 400
+    if hours < 1:
+        return jsonify(detail="hours must be at least 1."), 400
+    vmid = body.get("vmid")
+    state = {}
+
+    def extend(entries):
+        for entry in entries:
+            if entry["vmid"] == vmid:
+                entry["expires_at"] = max(entry.get("expires_at") or 0, time.time()) + hours * 3600
+                state["entry"] = entry
+        return entries
+
+    poolstore.update(POOL_FILE, extend)
+    if "entry" not in state:
+        return jsonify(detail=f"No VM with vmid {vmid!r}."), 404
+    return jsonify(vmid=vmid, expires_at=state["entry"]["expires_at"])
 
 
 @app.route("/api/admin/job")

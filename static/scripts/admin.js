@@ -40,7 +40,7 @@ async function loadPool() {
       const head = document.createElement("tr");
       head.className = "pool-group";
       const cell = document.createElement("td");
-      cell.colSpan = 6;
+      cell.colSpan = 7;
       cell.textContent = `${collapsedPools.has(pool) ? "▸" : "▾"} ${pool ?? "(no pool)"} (${groupEntries.length})`;
       head.appendChild(cell);
       head.addEventListener("click", () => {
@@ -80,6 +80,13 @@ async function loadPool() {
          const expiresCell = document.createElement("td");
          expiresCell.textContent = expiresLabel;
          tr.appendChild(expiresCell);
+         const actionsCell = document.createElement("td");
+         const extendBtn = document.createElement("button");
+         extendBtn.className = "secondary";
+         extendBtn.textContent = "Extend +1h";
+         extendBtn.addEventListener("click", () => extendVm(entry.vmid));
+         actionsCell.appendChild(extendBtn);
+         tr.appendChild(actionsCell);
          if (collapsedPools.has(pool)) tr.classList.add("hidden");
          poolRows.appendChild(tr);
       }
@@ -240,6 +247,20 @@ function openDeployModal(pool) {
    deployDialog.showModal();
 }
 
+async function extendVm(vmid) {
+   const res = await fetch("/api/admin/extend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vmid, hours: 1 }),
+   });
+   if (res.ok) {
+      loadPool();
+      return;
+   }
+   const data = await res.json();
+   alert(data.detail || "Failed to extend VM.");
+}
+
 async function deletePool(pool) {
    const suffix = pool.available > 0
       ? ` Its ${pool.available} available VMs are not removed`
@@ -379,8 +400,24 @@ destroySelectedBtn.addEventListener("click", () => {
 
 refreshPoolBtn.addEventListener("click", loadPool);
 
+async function reattachJob() {
+   try {
+      const res = await fetch("/api/admin/job");
+      if (!res.ok) return;
+      const job = await res.json();
+      if (job.status !== "running") return;
+      setBusy(true, job.kind);
+      document.querySelector(".job-status").style.display = "block";
+      jobStatus.textContent = `${job.kind}: ${job.status}`;
+      jobLog.textContent = job.log.join("\n");
+      jobLog.scrollTop = jobLog.scrollHeight;
+      pollJob(job.id);
+   } catch (error) {}
+}
+
 loadPool();
 loadPools();
+reattachJob();
 setInterval(() => {
    loadPool();
    updatePoolStats();

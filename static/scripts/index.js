@@ -1,4 +1,5 @@
 const MAX_VMS = 2;
+const PROVISION_TIMEOUT_MS = 600000;
 const buttonsContainer = document.getElementById("claim-buttons");
 const status = document.getElementById("status-message");
 const vmsHeading = document.getElementById("vms-heading");
@@ -12,8 +13,14 @@ const codeSubmitBtn = document.getElementById("code-submit-btn");
 const codeCancelBtn = document.getElementById("code-cancel-btn");
 const codeProgress = document.getElementById("code-progress");
 const codeStage = document.getElementById("code-stage");
-let redeemPoll = null;
-let redeemGen = 0;
+const claimProgress = document.getElementById("claim-progress");
+const swapDialog = document.getElementById("swap-dialog");
+const swapOptions = document.getElementById("swap-options");
+const swapError = document.getElementById("swap-error");
+const swapCancelBtn = document.getElementById("swap-cancel-btn");
+const polls = new Map();
+let pendingClaim = null;
+let dialogTicket = null;
 let vms = loadVms();
 
 function loadVms() {
@@ -35,8 +42,8 @@ function saveVms() {
 	localStorage.setItem("assigned_vm_urls", JSON.stringify(vms));
 }
 
-function addVm(url, pool) {
-	vms.push({ url, pool: pool || null });
+function addVm(url, pool, expiresAt) {
+	vms.push({ url, pool: pool || null, expires_at: expiresAt ?? null });
 	saveVms();
 	renderVms();
 }
@@ -51,8 +58,40 @@ function atCap() {
 	return vms.length >= MAX_VMS;
 }
 
-function setStatus(text) {
+function loadTickets() {
+	try {
+		const parsed = JSON.parse(localStorage.getItem("pending_tickets"));
+		if (Array.isArray(parsed)) return parsed;
+	} catch (error) {}
+	return [];
+}
+
+function saveTickets(tickets) {
+	localStorage.setItem("pending_tickets", JSON.stringify(tickets));
+}
+
+function addPending(ticket, pool) {
+	const tickets = loadTickets();
+	const existing = tickets.find((t) => t.ticket === ticket);
+	if (existing) {
+		existing.pool = pool || existing.pool;
+		saveTickets(tickets);
+		return existing;
+	}
+	const pending = { ticket, pool: pool || null, started: Date.now() };
+	tickets.push(pending);
+	saveTickets(tickets);
+	return pending;
+}
+
+function dropPending(ticket) {
+	saveTickets(loadTickets().filter((t) => t.ticket !== ticket));
+}
+
+function setStatus(text, kind) {
 	status.style.display = "block";
+	status.classList.remove("error", "success");
+	if (kind) status.classList.add(kind);
 	status.innerText = text;
 }
 
@@ -101,7 +140,16 @@ async function loadPoolButtons() {
 		}
 	} catch (error) {
 		renderButtons([{ text: "Claim", name: null }]);
+		setStatus("Could not load the pool list. You can still try claiming below.", "error");
 	}
+}
+
+function expiryText(expiresAt) {
+	const minutes = Math.round((expiresAt * 1000 - Date.now()) / 60000);
+	if (minutes <= 0) return "expired";
+	if (minutes < 60) return `${minutes}m left`;
+	if (minutes < 1440) return `${Math.floor(minutes / 60)}h ${minutes % 60}m left`;
+	return `${Math.floor(minutes / 1440)}d left`;
 }
 
 function renderVms() {
@@ -113,6 +161,13 @@ function renderVms() {
 		const label = document.createElement("span");
 		label.className = "vm-label";
 		label.innerText = vm.pool || "Workshop VM";
+		if (vm.expires_at) {
+			const expiry = document.createElement("span");
+			expiry.className = "vm-expiry";
+			expiry.innerText = expiryText(vm.expires_at);
+			expiry.title = new Date(vm.expires_at * 1000).toLocaleString();
+			label.appendChild(expiry);
+		}
 		const actions = document.createElement("div");
 		actions.className = "vm-actions";
 		const reconnectBtn = document.createElement("button");
@@ -125,11 +180,6 @@ function renderVms() {
 		actions.append(reconnectBtn, releaseBtn);
 		row.append(label, actions);
 		vmsContainer.appendChild(row);
-	}
-	if (atCap()) {
-		buttonsContainer.innerHTML = "";
-		codeBtn.hidden = true;
-		setStatus(`You already have ${MAX_VMS} machines. Release one to claim another.`);
 	}
 }
 
@@ -145,9 +195,16 @@ async function validateVm(vm) {
 			body: JSON.stringify({ url: vm.url })
 		});
 		const data = await response.json();
-		if (data.valid) return;
+		if (data.valid) {
+			if (data.expires_at) {
+				vm.expires_at = data.expires_at;
+				saveVms();
+			}
+			return;
+		}
 		if (data.url) {
 			vm.url = data.url;
+			vm.expires_at = data.expires_at ?? null;
 			saveVms();
 			setStatus("An expired machine was replaced with a new one.");
 		} else {
@@ -169,6 +226,7 @@ async function reconnectVm(vm, row) {
 		const data = await response.json();
 		if (response.ok && data.url) {
 			vm.url = data.url;
+			if (data.expires_at) vm.expires_at = data.expires_at;
 			saveVms();
 			setStatus("Redirecting...");
 			window.location.href = data.url;
@@ -178,11 +236,11 @@ async function reconnectVm(vm, row) {
 			setStatus("Your machine expired. Claim a new one below.");
 			if (!atCap()) await loadPoolButtons();
 		} else {
-			setStatus(data.detail || "Reconnect failed. Please try again.");
+			setStatus(data.detail || "Reconnect failed. Please try again.", "error");
 			setRowDisabled(row, false);
 		}
 	} catch (error) {
-		setStatus("Network error. Please try again.");
+		setStatus("Network error. Please try again.", "error");
 		setRowDisabled(row, false);
 	}
 }
@@ -202,43 +260,49 @@ async function releaseVm(vm, row) {
 		if (response.ok || response.status === 404) {
 			removeVm(vm);
 			renderVms();
-			setStatus("Machine released.");
+			setStatus("Machine released.", "success");
 		} else {
 			const data = await response.json();
-			setStatus(data.detail || "Release failed. Please try again.");
+			setStatus(data.detail || "Release failed. Please try again.", "error");
 			setRowDisabled(row, false);
 			return;
 		}
 	} catch (error) {
-		setStatus("Network error. Please try again.");
+		setStatus("Network error. Please try again.", "error");
 		setRowDisabled(row, false);
 		return;
 	}
-	if (!atCap()) await loadPoolButtons();
+	await loadPoolButtons();
 }
 
 async function init() {
 	renderVms();
 	if (vms.length) {
-		buttonsContainer.innerHTML = "";
-		codeBtn.hidden = true;
 		await Promise.all(vms.map(validateVm));
 		renderVms();
 	}
-	if (atCap()) return;
+	resumeTickets();
 
 	if (claimLabel) {
 		renderButtons([{ text: `Claim ${claimLabel}`, name: claimLabel }]);
-		handleTerminalAccess(claimLabel);
+		if (vms.length === 0) handleTerminalAccess(claimLabel);
 		return;
 	}
 
 	await loadPoolButtons();
 }
 
+function resumeTickets() {
+	const tickets = loadTickets();
+	if (!tickets.length) return;
+	claimProgress.hidden = false;
+	setStatus("Checking on your machine...");
+	for (const pending of tickets) pollTicket(pending.ticket, pending.pool, mainSink);
+}
+
 async function handleTerminalAccess(poolName, btn) {
 	if (atCap()) {
-		setStatus(`You already have ${MAX_VMS} machines. Release one to claim another.`);
+		openSwapModal(() => handleTerminalAccess(poolName, btn));
 		return;
 	}
 	setButtonsDisabled(true);
@@ -255,19 +319,20 @@ async function handleTerminalAccess(poolName, btn) {
 		const data = await response.json();
 
 		if (data.status === "provisioning") {
-			pollClaim(data.ticket, poolName);
+			claimProgress.hidden = false;
+			setStatus(stageText("cloning"));
+			pollTicket(data.ticket, poolName, mainSink);
 		} else if (response.ok) {
-			addVm(data.url, poolName);
-			setStatus("VM claimed! Redirecting...");
-
+			addVm(data.url, poolName, data.expires_at);
+			setStatus("VM claimed! Redirecting...", "success");
 			window.location.href = data.url;
 		} else {
 			if (data.code_required) openCodeDialog();
-			else setStatus(data.detail);
+			else setStatus(data.detail || "Claim failed. Please try again.", "error");
 			setButtonsDisabled(false);
 		}
 	} catch (error) {
-		setStatus("Network error. Please try again.");
+		setStatus("Network error. Please try again.", "error");
 		setButtonsDisabled(false);
 	}
 }
@@ -280,76 +345,98 @@ function stageText(stage) {
 	return "Preparing your machine...";
 }
 
-function pollClaim(ticket, poolName) {
-	setStatus(stageText("cloning"));
-	const poll = setInterval(async () => {
-		try {
-			const response = await fetch(`/api/redeem/${ticket}`);
-			const data = await response.json();
-			if (!response.ok || data.status === "error") {
-				clearInterval(poll);
-				setStatus(data.detail || "Provisioning failed. Please try again.");
-				setButtonsDisabled(false);
-				return;
-			}
-			if (data.stage) setStatus(stageText(data.stage));
-			if (data.status === "ready") {
-				clearInterval(poll);
-				addVm(data.url, data.pool || poolName);
-				setStatus("VM ready! Redirecting...");
-				window.location.href = data.url;
-			}
-		} catch (error) {}
+const mainSink = {
+	stage: (stage) => setStatus(stageText(stage)),
+	ready: (data, pool) => {
+		addVm(data.url, data.pool || pool, data.expires_at);
+		setStatus("VM ready! Redirecting...", "success");
+		window.location.href = data.url;
+	},
+	fail: (detail) => {
+		claimProgress.hidden = true;
+		setStatus(detail, "error");
+		setButtonsDisabled(false);
+	},
+};
+
+const dialogSink = {
+	stage: (stage) => { codeStage.textContent = stageText(stage); },
+	ready: (data, pool) => {
+		addVm(data.url, data.pool || pool, data.expires_at);
+		codeStage.textContent = "Redirecting...";
+		window.location.href = data.url;
+	},
+	fail: (detail) => redeemFailed(detail),
+};
+
+function pollTicket(ticket, pool, sink) {
+	const pending = addPending(ticket, pool);
+	polls.set(ticket, sink);
+	let poll = null;
+	const finish = () => {
+		clearInterval(poll);
+		polls.delete(ticket);
+		dropPending(ticket);
+		if (dialogTicket === ticket) dialogTicket = null;
+	};
+	poll = setInterval(async () => {
+		const current = polls.get(ticket);
+		if (!current) {
+			clearInterval(poll);
+			return;
+		}
+		let data = null;
+		let failed = null;
+		if (Date.now() - pending.started > PROVISION_TIMEOUT_MS) {
+			failed = "Provisioning is taking too long. Please contact your instructor.";
+		} else {
+			try {
+				const response = await fetch(`/api/redeem/${ticket}`);
+				data = await response.json();
+				if (!response.ok || data.status === "error") {
+					failed = data.detail || "Provisioning failed. Please try again.";
+				}
+			} catch (error) {}
+		}
+		if (failed) {
+			finish();
+			current.fail(failed);
+			return;
+		}
+		if (data && data.stage) current.stage(data.stage);
+		if (data && data.status === "ready") {
+			finish();
+			current.ready(data, pool);
+		}
 	}, 3000);
 }
 
-function finishRedeem(url, pool) {
-	if (redeemPoll) clearInterval(redeemPoll);
-	addVm(url, pool);
-	codeStage.textContent = "Redirecting...";
-	window.location.href = url;
-}
-
 function redeemFailed(detail) {
-	if (redeemPoll) clearInterval(redeemPoll);
 	codeProgress.hidden = true;
 	codeForm.hidden = false;
 	codeInput.disabled = false;
 	codeSubmitBtn.disabled = false;
-	codeError.textContent = detail;
+	codeError.textContent = detail || "";
 	codeInput.focus();
-}
-
-function pollRedeem(ticket, gen, pool) {
-	codeForm.hidden = true;
-	codeProgress.hidden = false;
-	redeemPoll = setInterval(async () => {
-		if (gen !== redeemGen) {
-			clearInterval(redeemPoll);
-			return;
-		}
-		try {
-			const response = await fetch(`/api/redeem/${ticket}`);
-			const data = await response.json();
-			if (!response.ok) {
-				redeemFailed(data.detail || "Lost track of your machine. Please try again.");
-				return;
-			}
-			if (data.stage) codeStage.textContent = stageText(data.stage);
-			if (data.status === "ready") finishRedeem(data.url, data.pool || pool);
-			else if (data.status === "error") redeemFailed(data.detail || "Provisioning failed. Please try again.");
-		} catch (error) {}
-	}, 3000);
 }
 
 async function redeemCode() {
 	if (atCap()) {
-		redeemFailed(`You already have ${MAX_VMS} machines. Release one first.`);
+		const code = codeInput.value.trim();
+		codeDialog.close();
+		openSwapModal(() => {
+			openCodeDialog();
+			codeInput.value = code;
+			redeemCode();
+		});
+		return;
+	}
+	if (dialogTicket && polls.has(dialogTicket)) {
+		redeemFailed("A machine is already being prepared. Please wait or press Cancel.");
 		return;
 	}
 	const code = codeInput.value.trim();
 	if (!code) return;
-	const gen = ++redeemGen;
 	codeError.textContent = "";
 	codeInput.disabled = true;
 	codeSubmitBtn.disabled = true;
@@ -362,32 +449,36 @@ async function redeemCode() {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ code })
 		});
-		if (gen !== redeemGen) return;
 		const data = await response.json();
 		if (response.ok && data.status === "ready") {
-			finishRedeem(data.url, data.pool);
+			addVm(data.url, data.pool, data.expires_at);
+			codeStage.textContent = "Redirecting...";
+			window.location.href = data.url;
 		} else if (response.ok && data.status === "provisioning") {
-			pollRedeem(data.ticket, gen, data.pool);
+			dialogTicket = data.ticket;
+			codeStage.textContent = stageText("cloning");
+			pollTicket(data.ticket, data.pool, dialogSink);
 		} else {
 			redeemFailed(data.detail || "Unknown code.");
 		}
 	} catch (error) {
-		if (gen === redeemGen) redeemFailed("Network error. Please try again.");
+		redeemFailed("Network error. Please try again.");
 	}
 }
 
 function cancelRedeem() {
-	redeemGen += 1;
-	if (redeemPoll) {
-		clearInterval(redeemPoll);
-		redeemPoll = null;
-	}
 	codeProgress.hidden = true;
 	codeForm.hidden = false;
 	codeInput.disabled = false;
 	codeSubmitBtn.disabled = false;
 	codeInput.value = "";
 	codeError.textContent = "";
+	if (dialogTicket && polls.has(dialogTicket)) {
+		polls.set(dialogTicket, mainSink);
+		claimProgress.hidden = false;
+		setStatus("Your machine is still being prepared. It will appear here when ready.");
+		dialogTicket = null;
+	}
 }
 
 function openCodeDialog() {
@@ -400,6 +491,52 @@ function openCodeDialog() {
 	codeDialog.showModal();
 	codeInput.focus();
 }
+
+function openSwapModal(claimFn) {
+	pendingClaim = claimFn;
+	swapError.textContent = "";
+	swapOptions.innerHTML = "";
+	for (const vm of vms) {
+		const row = document.createElement("div");
+		row.className = "swap-row";
+		const label = document.createElement("span");
+		label.className = "vm-label";
+		label.innerText = vm.pool || "Workshop VM";
+		const btn = document.createElement("button");
+		btn.className = "danger";
+		btn.innerText = "Release & claim";
+		btn.onclick = () => swapRelease(vm, btn);
+		row.append(label, btn);
+		swapOptions.appendChild(row);
+	}
+	swapDialog.showModal();
+}
+
+async function swapRelease(vm, btn) {
+	btn.disabled = true;
+	try {
+		const response = await fetch("/api/release", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ url: vm.url })
+		});
+		if (!response.ok && response.status !== 404) {
+			const data = await response.json();
+			swapError.textContent = data.detail || "Release failed. Please try again.";
+			btn.disabled = false;
+			return;
+		}
+		removeVm(vm);
+		swapDialog.close();
+		const claim = pendingClaim;
+		pendingClaim = null;
+		if (claim) claim();
+	} catch (error) {
+		swapError.textContent = "Network error. Please try again.";
+		btn.disabled = false;
+	}
+}
+
 codeBtn.addEventListener("click", openCodeDialog);
 codeForm.addEventListener("submit", (e) => {
 	e.preventDefault();
@@ -407,12 +544,17 @@ codeForm.addEventListener("submit", (e) => {
 });
 codeCancelBtn.addEventListener("click", () => codeDialog.close());
 codeDialog.addEventListener("close", cancelRedeem);
+swapCancelBtn.addEventListener("click", () => swapDialog.close());
+swapDialog.addEventListener("close", () => {
+	pendingClaim = null;
+	for (const btn of swapOptions.querySelectorAll("button")) btn.disabled = false;
+});
 
 init();
 
 function selectRandomBackground() {
 	let backgrounds = ["bliss.jpg", "macos.jpg", "penguins.png", "trig.png"];
-	let index = Math.round(Math.random() * (backgrounds.length - 1));
+	let index = Math.floor(Math.random() * backgrounds.length);
 	document.body.style.backgroundImage = `url('/images/${backgrounds[index]}')`;
 }
 selectRandomBackground();
