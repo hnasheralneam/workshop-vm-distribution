@@ -72,6 +72,7 @@ def default_config():
         "pool_name": "",
         "pool_code": "",
         "dispenser": "",
+        "private": "",
     }
 
 

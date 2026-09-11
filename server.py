@@ -242,12 +242,12 @@ def images(filename):
 
 @app.route("/api/types")
 def types():
-    pools = {name: {"name": name, "available": 0, "dispenser": bool(config.get("dispenser"))} for name, config in load_configs().items()}
+    pools = {name: {"name": name, "available": 0, "dispenser": bool(config.get("dispenser")), "private": bool(config.get("private"))} for name, config in load_configs().items()}
     for entry in poolstore.load(POOL_FILE):
         if not is_available(entry):
             continue
         name = display_name(entry)
-        group = pools.setdefault(name, {"name": name, "available": 0, "dispenser": False})
+        group = pools.setdefault(name, {"name": name, "available": 0, "dispenser": False, "private": False})
         group["available"] += 1
     return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated_pools()))
 
@@ -259,6 +259,13 @@ def claim():
     requested_pool = body.get("pool")
     requested_os = body.get("os")
 
+    configs = load_configs()
+    if requested_pool:
+        config = configs.get(requested_pool)
+        if config and config.get("private") and not code_matches(config, body.get("code")):
+            return jsonify(detail="This pool requires a valid code.", code_required=True), 403
+    private_pools = {name for name, cfg in configs.items() if cfg.get("private")}
+
     state = {}
 
     def reserve(entries):
@@ -266,6 +273,7 @@ def claim():
         if requested_pool:
             available = [entry for entry in available if display_name(entry) == requested_pool]
         else:
+            available = [entry for entry in available if display_name(entry) not in private_pools]
             if requested_os:
                 available = [entry for entry in available if os_type(entry) == requested_os]
         if available:
@@ -448,13 +456,17 @@ def set_ticket(ticket, **fields):
                 threading.Timer(600, drop_ticket, args=(ticket,)).start()
 
 
-def find_pool_by_code(code):
+def code_matches(config, code):
     code = (code or "").strip().upper()
     if not code or not code.isascii():
-        return None
+        return False
+    stored = (config.get("pool_code") or "").strip().upper()
+    return bool(stored) and hmac.compare_digest(stored, code)
+
+
+def find_pool_by_code(code):
     for config in load_configs().values():
-        stored = (config.get("pool_code") or "").strip().upper()
-        if stored and hmac.compare_digest(stored, code):
+        if code_matches(config, code):
             return config
     return None
 
@@ -688,6 +700,8 @@ def admin_update_pool(name):
     saved = load_configs().get(name)
     if saved is None:
         return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+    if body.get("private") and not (saved.get("pool_code") or "").strip():
+        return jsonify(detail="Private pools require a pool code."), 400
 
     overrides = {k: v for k, v in body.items() if k not in ("pool_name", "pool_code") and v not in (None, "")}
     try:
@@ -811,7 +825,7 @@ def admin_job(job_id=None):
 
 def startup():
     poolstore.update(POOL_FILE, lambda entries: [{k: v for k, v in e.items() if k != "reserved"} for e in entries])
-    poolstore.update(CONFIGS_FILE, lambda configs: {name: {**cfg, "dispenser": cfg.get("dispenser", True)} for name, cfg in configs.items()}, dict)
+    poolstore.update(CONFIGS_FILE, lambda configs: {name: {**cfg, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private"))} for name, cfg in configs.items()}, dict)
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()

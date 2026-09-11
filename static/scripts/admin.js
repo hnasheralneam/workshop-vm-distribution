@@ -13,6 +13,7 @@ const deployTitle = document.getElementById("deploy-title");
 const newDeployBtn = document.getElementById("new-deploy-btn");
 const deployCancelBtn = document.getElementById("deploy-cancel-btn");
 const dispenserInput = document.getElementById("dispenser");
+const privateInput = document.getElementById("private");
 
 let pollHandle = null;
 let runningJob = null;
@@ -144,7 +145,8 @@ async function loadPools() {
       card.append(header, meta);
       const badge = document.createElement("p");
       badge.className = "pool-badge";
-      badge.textContent = pool.config.dispenser ? "dispenser" : "\u00A0";
+      const badges = [pool.config.dispenser && "dispenser", pool.config.private && "private"].filter(Boolean).join(", ");
+      badge.textContent = badges || "\u00A0";
       card.append(badge);
       const actions = document.createElement("div");
       actions.className = "pool-actions";
@@ -200,6 +202,7 @@ function openDeployModal(pool) {
       provisionForm.elements.vm_count.value = pool.count;
       provisionForm.elements.vm_duration_hours.value = pool.config.guac_link_ttl_seconds / 3600;
       dispenserInput.checked = !!pool.config.dispenser;
+      privateInput.checked = !!pool.config.private;
       provisionForm.elements.template_vm_access_method.value = pool.config.template_vm_access_method;
       provisionForm.elements.template_vm_id.value = pool.config.template_vm_id;
       provisionForm.elements.template_vm_username.value = pool.config.template_vm_username ?? "";
@@ -216,6 +219,7 @@ function openDeployModal(pool) {
       provisionForm.elements.template_vm_username.value = "";
       provisionForm.elements.template_vm_id.value = "";
       dispenserInput.checked = true;
+      privateInput.checked = false;
       passwordField.value = "";
       passwordField.placeholder = "";
       provisionBtn.textContent = "Provision";
@@ -312,6 +316,7 @@ provisionForm.addEventListener("submit", async (e) => {
       }
    }
    body.dispenser = dispenserInput.checked;
+   body.private = privateInput.checked;
 
    if (editingPool) {
       const res = await fetch(`/api/admin/pools/${encodeURIComponent(editingPool.name)}`, {
