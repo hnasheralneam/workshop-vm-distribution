@@ -656,7 +656,7 @@ def admin_provision():
 
     def save(configs):
         config["pool_code"] = generate_pool_code({c.get("pool_code") for c in configs.values()})
-        configs[config_pool_name(config)] = config
+        configs[config_pool_name(config)] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
         return configs
 
     poolstore.update(CONFIGS_FILE, save, dict)
@@ -714,7 +714,7 @@ def admin_update_pool(name):
 
     def replace(configs):
         if name in configs:
-            configs[name] = config
+            configs[name] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
             state["done"] = True
         return configs
 
@@ -825,7 +825,7 @@ def admin_job(job_id=None):
 
 def startup():
     poolstore.update(POOL_FILE, lambda entries: [{k: v for k, v in e.items() if k != "reserved"} for e in entries])
-    poolstore.update(CONFIGS_FILE, lambda configs: {name: {**cfg, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private"))} for name, cfg in configs.items()}, dict)
+    poolstore.update(CONFIGS_FILE, lambda configs: {name: {**{k: v for k, v in cfg.items() if k not in provision.GLOBAL_FIELDS}, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private"))} for name, cfg in configs.items()}, dict)
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()

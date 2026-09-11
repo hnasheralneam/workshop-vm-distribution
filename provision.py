@@ -27,6 +27,12 @@ INT_FIELDS = {"template_vm_id", "guac_link_ttl_seconds", "vm_count"}
 
 SECRET_FIELDS = {"proxmox_token_secret", "template_vm_password", "guacamole_key"}
 
+GLOBAL_FIELDS = {
+    "proxmox_url", "proxmox_user", "proxmox_token_name", "proxmox_token_secret",
+    "proxmox_node", "proxmox_host", "proxmox_scheme",
+    "guacamole_url", "guacamole_internal_url", "guacamole_key", "url_output_file",
+}
+
 TEMPLATE_FIELDS = {
     "template_vm_access_method",
     "template_vm_id",
