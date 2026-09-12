@@ -456,8 +456,10 @@ def set_ticket(ticket, **fields):
     with ticket_lock:
         if ticket in redeem_tickets:
             redeem_tickets[ticket].update(fields)
-            if fields.get("status") in ("ready", "error"):
-                threading.Timer(600, drop_ticket, args=(ticket,)).start()
+            status = fields.get("status")
+            if status in ("ready", "error"):
+                retention = 86400 if status == "ready" else 600
+                threading.Timer(retention, drop_ticket, args=(ticket,)).start()
 
 
 def code_matches(config, code):
@@ -795,8 +797,8 @@ def admin_redeploy():
 def admin_destroy():
     body = request.get_json(silent=True) or {}
     mode = body.get("mode")
-    if mode not in ("all", "expired", "specific"):
-        return jsonify(detail="mode must be 'all', 'expired', or 'specific'."), 400
+    if mode not in ("all", "specific"):
+        return jsonify(detail="mode must be 'all' or 'specific'."), 400
 
     vmids = body.get("vmids") or []
     if mode == "specific" and not vmids:
