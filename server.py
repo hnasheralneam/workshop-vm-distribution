@@ -490,7 +490,8 @@ def run_redeem_provision(ticket, config):
 
     try:
         config = provision.build_config(config)
-        student_id = provision.allocate_student_ids(config["pool_name"], config["url_output_file"], 1)[0]
+        pool_name = config_pool_name(config)
+        student_id = provision.allocate_student_ids(pool_name, config["url_output_file"], 1)[0]
         vmid, student_id, url, expires_at = provision.provision_one(config, student_id, log)
         set_ticket(ticket, stage="adding")
         entry = {
@@ -500,7 +501,7 @@ def run_redeem_provision(ticket, config):
             "claimed": True,
             "expires_at": expires_at,
             "access_method": config["template_vm_access_method"],
-            "pool": config["pool_name"],
+            "pool": pool_name,
             "template_vm_username": config["template_vm_username"],
             "template_vm_password": config["template_vm_password"],
             "created_at": time.time(),
