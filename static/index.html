@@ -17,9 +17,6 @@
 			<div id="claim-buttons">
 				<button id="claim-btn" onclick="handleTerminalAccess()">Claim</button>
 			</div>
-			<div id="claim-progress" hidden>
-				<div class="spinner"></div>
-			</div>
 			<button id="code-btn" hidden>Enter code</button>
 			<p id="status-message" role="status" aria-live="polite"></p>
 		</div>
@@ -34,10 +31,6 @@
 					<button type="submit" id="code-submit-btn">Claim box</button>
 				</div>
 			</form>
-			<div id="code-progress" hidden>
-				<div class="spinner"></div>
-				<p id="code-stage"></p>
-			</div>
 		</dialog>
 
 		<dialog id="swap-dialog">
@@ -47,6 +40,64 @@
 			<p id="swap-error"></p>
 			<div class="modal-actions">
 				<button type="button" class="secondary" id="swap-cancel-btn">Cancel</button>
+			</div>
+		</dialog>
+
+		<dialog id="provision-dialog">
+			<h2>Preparing your machine</h2>
+			<div class="orbit" id="provision-orbit">
+				<svg viewBox="0 0 210 210">
+					<circle class="track" cx="105" cy="105" r="72"/>
+					<circle class="burst" cx="105" cy="105" r="72"/>
+					<g>
+						<circle class="arc a0" cx="105" cy="105" r="72" stroke-dasharray="100 352" transform="rotate(-130 105 105)"/>
+						<circle class="arc a1" cx="105" cy="105" r="72" stroke-dasharray="100 352" transform="rotate(-40 105 105)"/>
+						<circle class="arc a2" cx="105" cy="105" r="72" stroke-dasharray="100 352" transform="rotate(50 105 105)"/>
+						<circle class="arc a3" cx="105" cy="105" r="72" stroke-dasharray="100 352" transform="rotate(140 105 105)"/>
+					</g>
+					<g class="ico" transform="translate(105,33)">
+						<circle class="halo" cx="0" cy="0" r="13"/>
+						<rect class="ico-l" x="-8" y="-5" width="16" height="10" rx="2"/>
+						<circle class="solid" cx="4.5" cy="1.5" r="1.4"/>
+					</g>
+					<g class="ico" transform="translate(177,105)">
+						<circle class="halo" cx="0" cy="0" r="13"/>
+						<path class="ico-l" d="M -3.6 -6.2 a 6.8 6.8 0 1 0 7.2 0"/>
+						<line class="ico-l" x1="0" y1="-9" x2="0" y2="-1.5"/>
+					</g>
+					<g class="ico" transform="translate(105,177)">
+						<circle class="halo" cx="0" cy="0" r="13"/>
+						<path class="ico-l" d="M -4.5 -1.5 a 6.4 6.4 0 0 1 9 0"/>
+						<path class="ico-l" d="M -7.5 -5 a 10.7 10.7 0 0 1 15 0"/>
+						<circle class="solid" cx="0" cy="3" r="1.7"/>
+					</g>
+					<g class="ico" transform="translate(33,105)">
+						<circle class="halo" cx="0" cy="0" r="13"/>
+						<path class="ico-l" d="M 0 -8 L 7 -4.5 L 0 -1 L -7 -4.5 Z"/>
+						<path class="ico-l" d="M -7 -0.5 L 0 3 L 7 -0.5"/>
+						<path class="ico-l" d="M -7 3.5 L 0 7 L 7 3.5"/>
+					</g>
+					<g class="spinner-orbit">
+						<circle class="trail t2" cx="75.7" cy="39.2" r="2"/>
+						<circle class="trail t1" cx="90" cy="34.6" r="3"/>
+						<circle class="comet" cx="105" cy="33" r="5"/>
+					</g>
+					<path class="check" d="M84 107 l14 14 l28 -30"/>
+				</svg>
+				<div class="cube-wrap"><div class="cube3d">
+					<div class="face f-front"></div>
+					<div class="face f-back"></div>
+					<div class="face f-right"></div>
+					<div class="face f-left"></div>
+					<div class="face f-top"></div>
+					<div class="face f-bottom"></div>
+				</div></div>
+			</div>
+			<p id="provision-label"></p>
+			<div id="provision-lines"></div>
+			<p id="provision-error"></p>
+			<div class="modal-actions">
+				<button type="button" class="secondary" id="provision-close-btn" hidden>Close</button>
 			</div>
 		</dialog>
 

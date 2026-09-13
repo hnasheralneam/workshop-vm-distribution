@@ -11,16 +11,22 @@ const codeInput = document.getElementById("code-input");
 const codeError = document.getElementById("code-error");
 const codeSubmitBtn = document.getElementById("code-submit-btn");
 const codeCancelBtn = document.getElementById("code-cancel-btn");
-const codeProgress = document.getElementById("code-progress");
-const codeStage = document.getElementById("code-stage");
-const claimProgress = document.getElementById("claim-progress");
 const swapDialog = document.getElementById("swap-dialog");
 const swapOptions = document.getElementById("swap-options");
 const swapError = document.getElementById("swap-error");
 const swapCancelBtn = document.getElementById("swap-cancel-btn");
+const provisionDialog = document.getElementById("provision-dialog");
+const provisionOrbit = document.getElementById("provision-orbit");
+const provisionLabel = document.getElementById("provision-label");
+const provisionLines = document.getElementById("provision-lines");
+const provisionError = document.getElementById("provision-error");
+const provisionCloseBtn = document.getElementById("provision-close-btn");
 const polls = new Map();
+const modalTickets = new Map();
 let pendingClaim = null;
-let dialogTicket = null;
+let provisionErrorMode = false;
+let lastProvisionError = "";
+let celebrating = false;
 let vms = loadVms();
 
 function loadVms() {
@@ -295,9 +301,10 @@ async function init() {
 function resumeTickets() {
 	const tickets = loadTickets();
 	if (!tickets.length) return;
-	claimProgress.hidden = false;
-	setStatus("Checking on your machine...");
-	for (const pending of tickets) pollTicket(pending.ticket, pending.pool, mainSink);
+	for (const pending of tickets) {
+		provisionStart(pending.ticket, pending.pool);
+		pollTicket(pending.ticket, pending.pool, modalSink(pending.ticket));
+	}
 }
 
 async function handleTerminalAccess(poolName, btn) {
@@ -319,9 +326,8 @@ async function handleTerminalAccess(poolName, btn) {
 		const data = await response.json();
 
 		if (data.status === "provisioning") {
-			claimProgress.hidden = false;
-			setStatus(stageText("cloning"));
-			pollTicket(data.ticket, poolName, mainSink);
+			provisionStart(data.ticket, poolName);
+			pollTicket(data.ticket, poolName, modalSink(data.ticket));
 		} else if (response.ok) {
 			addVm(data.url, poolName, data.expires_at);
 			setStatus("VM claimed! Redirecting...", "success");
@@ -345,7 +351,138 @@ function stageText(stage) {
 	return "Preparing your machine...";
 }
 
-const mainSink = {
+const STAGES = ["cloning", "booting", "network", "adding"];
+const orbitArcs = provisionOrbit.querySelectorAll(".arc");
+const orbitIcons = provisionOrbit.querySelectorAll(".ico");
+
+function orbitSet(stage) {
+	provisionOrbit.classList.remove("s-done", "s-error");
+	for (const arc of orbitArcs) arc.classList.remove("lit", "bad");
+	for (const icon of orbitIcons) icon.classList.remove("done", "now");
+	if (stage === "done") {
+		for (const arc of orbitArcs) arc.classList.add("lit");
+		for (const icon of orbitIcons) icon.classList.add("done");
+		provisionOrbit.classList.add("s-done");
+		return;
+	}
+	if (stage === "error") {
+		for (const arc of orbitArcs) arc.classList.add("bad");
+		provisionOrbit.classList.add("s-error");
+		return;
+	}
+	const upto = STAGES.indexOf(stage);
+	for (let i = 0; i < upto; i++) {
+		orbitArcs[i].classList.add("lit");
+		orbitIcons[i].classList.add("done");
+	}
+	if (upto >= 0) orbitIcons[upto].classList.add("now");
+}
+
+function setStageLabel(el, text) {
+	el.textContent = "";
+	const base = document.createElement("span");
+	base.innerText = text.replace(/\.\.\.$/, "");
+	const dots = document.createElement("span");
+	dots.className = "dots";
+	for (let i = 0; i < 3; i++) {
+		const dot = document.createElement("i");
+		dot.innerText = ".";
+		dots.appendChild(dot);
+	}
+	el.append(base, dots);
+}
+
+function syncProvisionOrbit() {
+	let min = Infinity;
+	for (const info of modalTickets.values()) min = Math.min(min, info.rank);
+	const stage = modalTickets.size ? STAGES[min] : null;
+	orbitSet(stage);
+	if (modalTickets.size) setStageLabel(provisionLabel, stageText(stage));
+	else provisionLabel.textContent = "";
+}
+
+function renderProvisionLines() {
+	provisionLines.innerHTML = "";
+	if (modalTickets.size < 2) return;
+	for (const [ticket, info] of modalTickets) {
+		const row = document.createElement("div");
+		row.className = "pline";
+		const dot = document.createElement("span");
+		dot.className = "pdot";
+		const text = document.createElement("span");
+		setStageLabel(text, (info.pool ? `${info.pool}: ` : "") + stageText(STAGES[info.rank]));
+		row.append(dot, text);
+		provisionLines.appendChild(row);
+	}
+}
+
+function provisionStart(ticket, pool) {
+	if (!provisionDialog.open) {
+		celebrating = false;
+		provisionErrorMode = false;
+		lastProvisionError = "";
+		provisionError.textContent = "";
+		provisionCloseBtn.hidden = true;
+		provisionDialog.showModal();
+	}
+	modalTickets.set(ticket, { rank: 0, pool: pool || null });
+	syncProvisionOrbit();
+	renderProvisionLines();
+}
+
+function provisionStage(ticket, stage) {
+	if (celebrating) return;
+	const info = modalTickets.get(ticket);
+	if (!info) return;
+	info.rank = Math.max(info.rank, STAGES.indexOf(stage));
+	syncProvisionOrbit();
+	renderProvisionLines();
+}
+
+function provisionReady(ticket, data, pool) {
+	modalTickets.delete(ticket);
+	addVm(data.url, data.pool || pool, data.expires_at);
+	if (!provisionDialog.open || celebrating) {
+		window.location.href = data.url;
+		return;
+	}
+	celebrating = true;
+	provisionLines.innerHTML = "";
+	orbitSet("done");
+	setStageLabel(provisionLabel, "VM ready! Opening...");
+	setTimeout(() => { window.location.href = data.url; }, 1200);
+}
+
+function provisionFail(ticket, detail) {
+	if (celebrating) return;
+	modalTickets.delete(ticket);
+	renderProvisionLines();
+	if (modalTickets.size) {
+		provisionError.textContent = detail;
+		return;
+	}
+	if (provisionDialog.open) {
+		orbitSet("error");
+		provisionLabel.innerText = "";
+		provisionError.textContent = detail;
+		provisionCloseBtn.hidden = false;
+		provisionErrorMode = true;
+		lastProvisionError = detail;
+	} else {
+		setStatus(detail, "error");
+		setButtonsDisabled(false);
+	}
+}
+
+function modalSink(ticket) {
+	return {
+		stage: (stage) => provisionStage(ticket, stage),
+		ready: (data, pool) => provisionReady(ticket, data, pool),
+		fail: (detail) => provisionFail(ticket, detail),
+	};
+}
+
+const backgroundSink = {
 	stage: (stage) => setStatus(stageText(stage)),
 	ready: (data, pool) => {
 		addVm(data.url, data.pool || pool, data.expires_at);
@@ -353,20 +490,9 @@ const mainSink = {
 		window.location.href = data.url;
 	},
 	fail: (detail) => {
-		claimProgress.hidden = true;
 		setStatus(detail, "error");
 		setButtonsDisabled(false);
 	},
-};
-
-const dialogSink = {
-	stage: (stage) => { codeStage.textContent = stageText(stage); },
-	ready: (data, pool) => {
-		addVm(data.url, data.pool || pool, data.expires_at);
-		codeStage.textContent = "Redirecting...";
-		window.location.href = data.url;
-	},
-	fail: (detail) => redeemFailed(detail),
 };
 
 function pollTicket(ticket, pool, sink) {
@@ -377,7 +503,6 @@ function pollTicket(ticket, pool, sink) {
 		clearInterval(poll);
 		polls.delete(ticket);
 		dropPending(ticket);
-		if (dialogTicket === ticket) dialogTicket = null;
 	};
 	poll = setInterval(async () => {
 		const current = polls.get(ticket);
@@ -412,7 +537,6 @@ function pollTicket(ticket, pool, sink) {
 }
 
 function redeemFailed(detail) {
-	codeProgress.hidden = true;
 	codeForm.hidden = false;
 	codeInput.disabled = false;
 	codeSubmitBtn.disabled = false;
@@ -431,8 +555,8 @@ async function redeemCode() {
 		});
 		return;
 	}
-	if (dialogTicket && polls.has(dialogTicket)) {
-		redeemFailed("A machine is already being prepared. Please wait or press Cancel.");
+	if (polls.size) {
+		redeemFailed("A machine is already being prepared. Please wait.");
 		return;
 	}
 	const code = codeInput.value.trim();
@@ -440,9 +564,6 @@ async function redeemCode() {
 	codeError.textContent = "";
 	codeInput.disabled = true;
 	codeSubmitBtn.disabled = true;
-	codeForm.hidden = true;
-	codeProgress.hidden = false;
-	codeStage.textContent = "Checking code...";
 	try {
 		const response = await fetch("/api/redeem", {
 			method: "POST",
@@ -452,12 +573,11 @@ async function redeemCode() {
 		const data = await response.json();
 		if (response.ok && data.status === "ready") {
 			addVm(data.url, data.pool, data.expires_at);
-			codeStage.textContent = "Redirecting...";
 			window.location.href = data.url;
 		} else if (response.ok && data.status === "provisioning") {
-			dialogTicket = data.ticket;
-			codeStage.textContent = stageText("cloning");
-			pollTicket(data.ticket, data.pool, dialogSink);
+			codeDialog.close();
+			provisionStart(data.ticket, data.pool);
+			pollTicket(data.ticket, data.pool, modalSink(data.ticket));
 		} else {
 			redeemFailed(data.detail || "Unknown code.");
 		}
@@ -466,24 +586,8 @@ async function redeemCode() {
 	}
 }
 
-function cancelRedeem() {
-	codeProgress.hidden = true;
-	codeForm.hidden = false;
-	codeInput.disabled = false;
-	codeSubmitBtn.disabled = false;
-	codeInput.value = "";
-	codeError.textContent = "";
-	if (dialogTicket && polls.has(dialogTicket)) {
-		polls.set(dialogTicket, mainSink);
-		claimProgress.hidden = false;
-		setStatus("Your machine is still being prepared. It will appear here when ready.");
-		dialogTicket = null;
-	}
-}
-
 function openCodeDialog() {
 	codeForm.hidden = false;
-	codeProgress.hidden = true;
 	codeError.textContent = "";
 	codeInput.value = "";
 	codeInput.disabled = false;
@@ -543,12 +647,36 @@ codeForm.addEventListener("submit", (e) => {
 	redeemCode();
 });
 codeCancelBtn.addEventListener("click", () => codeDialog.close());
-codeDialog.addEventListener("close", cancelRedeem);
 swapCancelBtn.addEventListener("click", () => swapDialog.close());
 swapDialog.addEventListener("close", () => {
 	pendingClaim = null;
 	for (const btn of swapOptions.querySelectorAll("button")) btn.disabled = false;
 });
+provisionCloseBtn.addEventListener("click", () => {
+	releaseProvision();
+	provisionDialog.close();
+});
+provisionDialog.addEventListener("close", releaseProvision);
+provisionDialog.addEventListener("cancel", (e) => {
+	if (modalTickets.size && !celebrating) e.preventDefault();
+});
+
+function releaseProvision() {
+	if (celebrating) return;
+	for (const ticket of modalTickets.keys()) {
+		if (polls.has(ticket)) polls.set(ticket, backgroundSink);
+	}
+	modalTickets.clear();
+	if (provisionErrorMode) {
+		setStatus(lastProvisionError, "error");
+		setButtonsDisabled(false);
+	}
+	orbitSet(null);
+	provisionError.textContent = "";
+	provisionLabel.innerText = "";
+	provisionLines.innerHTML = "";
+	provisionErrorMode = false;
+}
 
 init();
 
