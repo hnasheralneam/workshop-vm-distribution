@@ -174,6 +174,7 @@ ask_var PROXMOX_TOKEN_NAME "Proxmox API token name (part after ! in the token ID
 ask_var PROXMOX_TOKEN_SECRET "Proxmox API token secret" secret
 ask_var PROXMOX_SOURCE_NODE "Proxmox node"
 ask_var PUBLIC_GUAC_URL "Public Guacamole base URL for students"
+ask_var INTERNAL_GUAC_URL "Internal Guacamole base URL for token minting (same-box default ok)"
 
 if [[ -z "$PROXMOX_TOKEN_NAME" || -z "$PROXMOX_TOKEN_SECRET" ]]; then
   echo "PROXMOX_TOKEN_NAME and PROXMOX_TOKEN_SECRET are required (export them or run interactively)" >&2
