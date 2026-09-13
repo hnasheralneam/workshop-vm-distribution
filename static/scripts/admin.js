@@ -1,9 +1,8 @@
 const provisionForm = document.getElementById("provision-form");
 const provisionBtn = document.getElementById("provision-btn");
 const destroyAllBtn = document.getElementById("destroy-all-btn");
-const destroyExpiredBtn = document.getElementById("destroy-expired-btn");
 const destroySelectedBtn = document.getElementById("destroy-selected-btn");
-const refreshPoolBtn = document.getElementById("refresh-pool-btn");
+const extendSelectedBtn = document.getElementById("extend-selected-btn");
 const poolRows = document.getElementById("pool-rows");
 const redeployRows = document.getElementById("redeploy-rows");
 const jobStatus = document.getElementById("job-status");
@@ -14,6 +13,8 @@ const newDeployBtn = document.getElementById("new-deploy-btn");
 const deployCancelBtn = document.getElementById("deploy-cancel-btn");
 const dispenserInput = document.getElementById("dispenser");
 const privateInput = document.getElementById("private");
+const poolSearch = document.getElementById("pool-search");
+const poolEmpty = document.getElementById("pool-empty");
 
 let pollHandle = null;
 let runningJob = null;
@@ -23,6 +24,11 @@ const collapsedPools = new Set();
 const ICONS = {
    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+   lockOpen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>',
+   dispense: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/><path d="M15 11v6"/><path d="M12 14h6"/></svg>',
+   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
 };
 
 async function loadPool() {
@@ -40,7 +46,7 @@ async function loadPool() {
       const head = document.createElement("tr");
       head.className = "pool-group";
       const cell = document.createElement("td");
-      cell.colSpan = 7;
+      cell.colSpan = 6;
       cell.textContent = `${collapsedPools.has(pool) ? "▸" : "▾"} ${pool ?? "(no pool)"} (${groupEntries.length})`;
       head.appendChild(cell);
       head.addEventListener("click", () => {
@@ -54,9 +60,6 @@ async function loadPool() {
       poolRows.appendChild(head);
       for (const entry of groupEntries) {
          const statusLabel = entry.expired ? "expired" : (entry.claimed ? "claimed" : "available");
-         const expiresLabel = entry.expires_at
-            ? new Date(entry.expires_at * 1000).toLocaleString()
-            : "n/a";
          const tr = document.createElement("tr");
          const checkCell = document.createElement("td");
          const checkbox = document.createElement("input");
@@ -78,19 +81,20 @@ async function loadPool() {
          statusCell.appendChild(pill);
          tr.appendChild(statusCell);
          const expiresCell = document.createElement("td");
-         expiresCell.textContent = expiresLabel;
+         if (entry.expires_at) {
+            expiresCell.title = new Date(entry.expires_at * 1000).toLocaleString();
+            expiresCell.textContent = entry.expired
+               ? "expired"
+               : formatTimeAmount(Math.max(0, entry.expires_at * 1000 - Date.now()), "dhm").replace(/ and $/, "").trim() || "under a minute";
+         } else {
+            expiresCell.textContent = "n/a";
+         }
          tr.appendChild(expiresCell);
-         const actionsCell = document.createElement("td");
-         const extendBtn = document.createElement("button");
-         extendBtn.className = "secondary";
-         extendBtn.textContent = "Extend +1h";
-         extendBtn.addEventListener("click", () => extendVm(entry.vmid));
-         actionsCell.appendChild(extendBtn);
-         tr.appendChild(actionsCell);
          if (collapsedPools.has(pool)) tr.classList.add("hidden");
          poolRows.appendChild(tr);
       }
    }
+   updateSelectionButtons();
 }
 
 function setBusy(busy, kind = "destroy") {
@@ -98,7 +102,18 @@ function setBusy(busy, kind = "destroy") {
    for (const btn of document.querySelectorAll("button")) {
       btn.disabled = busy && (kind === "destroy" || btn.classList.contains("deploy-btn"));
    }
+   if (!busy) updateSelectionButtons();
 }
+
+function updateSelectionButtons() {
+   const any = poolRows.querySelector(".vm-checkbox:checked") !== null;
+   extendSelectedBtn.disabled = runningJob === "destroy" || !any;
+   destroySelectedBtn.disabled = runningJob === "destroy" || !any;
+}
+
+poolRows.addEventListener("change", (e) => {
+   if (e.target.classList.contains("vm-checkbox")) updateSelectionButtons();
+});
 
 function copyToClipboard(text) {
    if (navigator.clipboard) {
@@ -117,68 +132,122 @@ function fallbackCopy(text) {
    textarea.remove();
 }
 
+let poolList = [];
+let poolFilter = "all";
+
+const POOL_FILTERS = {
+   all: () => true,
+   "in-use": (p) => p.in_use,
+   free: (p) => p.available > 0,
+   dispenser: (p) => !!p.config.dispenser,
+   private: (p) => !!p.config.private,
+};
+
 async function loadPools() {
    const res = await fetch("/api/admin/pools");
    if (!res.ok) return;
-   const pools = await res.json();
-   redeployRows.innerHTML = "";
-   if (pools.length === 0) {
-      redeployRows.textContent = "No pools.";
-      return;
-   }
-   for (const pool of pools) {
+   poolList = await res.json();
+   poolList.sort((a, b) => (b.last_used || 0) - (a.last_used || 0) || a.name.localeCompare(b.name));
+   renderPools();
+}
+
+function buildPoolCard(pool) {
       const card = document.createElement("div");
       card.className = "pool-card";
       card.dataset.pool = pool.name;
+      card.dataset.name = pool.name.toLowerCase();
+      card.dataset.available = pool.available;
+      card.dataset.inUse = pool.in_use ? "1" : "0";
+      card.dataset.dispenser = pool.config.dispenser ? "1" : "0";
+      card.dataset.private = pool.config.private ? "1" : "0";
       const header = document.createElement("div");
       header.className = "pool-header";
+      const title = document.createElement("div");
+      title.className = "pool-title";
       const name = document.createElement("h3");
       name.textContent = pool.name;
+      title.append(name);
+      if (pool.config.pool_code) {
+         const chip = document.createElement("button");
+         chip.type = "button";
+         chip.className = "pool-code";
+         chip.dataset.tip = "Copy claim code";
+         chip.textContent = pool.config.pool_code;
+         chip.addEventListener("click", () => {
+            copyToClipboard(pool.config.pool_code);
+            chip.textContent = "Copied!";
+            setTimeout(() => { chip.textContent = pool.config.pool_code; }, 1500);
+         });
+         title.append(chip);
+      }
+      if (pool.config.dispenser) {
+         const flag = document.createElement("span");
+         flag.className = "pool-flag";
+         flag.dataset.tip = "Dispenser: clones a VM when none are free";
+         flag.innerHTML = ICONS.dispense;
+         title.append(flag);
+      }
+      const count = document.createElement("span");
+      count.className = "pool-count";
+      count.dataset.tip = `${pool.available} available, ${pool.total} total`;
+      count.setAttribute("aria-label", `${pool.available} available, ${pool.total} total`);
+      count.textContent = `${pool.available} / ${pool.total}`;
+      header.append(title, count);
+      card.append(header);
+      const actions = document.createElement("div");
+      actions.className = "pool-actions";
+      const linkBtn = document.createElement("button");
+      linkBtn.type = "button";
+      linkBtn.className = "icon-btn";
+      linkBtn.dataset.tip = "Copy claim link";
+      linkBtn.setAttribute("aria-label", "Copy claim link");
+      linkBtn.innerHTML = ICONS.link;
+      linkBtn.addEventListener("click", () => {
+         const code = pool.config.pool_code ? `?code=${encodeURIComponent(pool.config.pool_code)}` : "";
+         copyToClipboard(`${location.origin}/claim/${encodeURIComponent(pool.name)}${code}`);
+         linkBtn.innerHTML = ICONS.check;
+         setTimeout(() => { linkBtn.innerHTML = ICONS.link; }, 1500);
+      });
+      const lockBtn = document.createElement("button");
+      lockBtn.type = "button";
+      lockBtn.className = "icon-btn";
+      const syncLock = () => {
+         lockBtn.innerHTML = pool.config.private ? ICONS.lock : ICONS.lockOpen;
+         const tip = pool.config.private ? "Private: click to toggle" : "Public: click to toggle";
+         lockBtn.dataset.tip = tip;
+         lockBtn.setAttribute("aria-label", tip);
+      };
+      syncLock();
+      lockBtn.addEventListener("click", async () => {
+         const res = await fetch(`/api/admin/pools/${encodeURIComponent(pool.name)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ private: !pool.config.private }),
+         });
+         if (res.ok) {
+            pool.config.private = !pool.config.private;
+            syncLock();
+            lockBtn.closest(".pool-card").dataset.private = pool.config.private ? "1" : "0";
+         } else {
+            const data = await res.json().catch(() => ({}));
+            alert(data.detail || "Failed to update pool.");
+         }
+      });
       const editBtn = document.createElement("button");
+      editBtn.type = "button";
       editBtn.className = "icon-btn";
-      editBtn.title = "Edit";
-      editBtn.setAttribute("aria-label", "Edit");
+      editBtn.dataset.tip = "Edit pool";
+      editBtn.setAttribute("aria-label", "Edit pool");
       editBtn.innerHTML = ICONS.edit;
       editBtn.addEventListener("click", () => openDeployModal(pool));
       const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
       deleteBtn.className = "icon-btn danger";
-      deleteBtn.title = "Delete";
-      deleteBtn.setAttribute("aria-label", "Delete");
+      deleteBtn.dataset.tip = "Delete pool";
+      deleteBtn.setAttribute("aria-label", "Delete pool");
       deleteBtn.innerHTML = ICONS.trash;
       deleteBtn.addEventListener("click", () => deletePool(pool));
-      header.append(name, editBtn, deleteBtn);
-      const meta = document.createElement("p");
-      meta.className = "pool-meta";
-      meta.textContent = `${pool.available} available, ${pool.total} total`;
-      card.append(header, meta);
-      const badge = document.createElement("p");
-      badge.className = "pool-badge";
-      const badges = [pool.config.dispenser && "dispenser", pool.config.private && "private"].filter(Boolean).join(", ");
-      badge.textContent = badges || "\u00A0";
-      card.append(badge);
-      const actions = document.createElement("div");
-      actions.className = "pool-actions";
-      const copyBtn = document.createElement("button");
-      copyBtn.className = "secondary";
-      copyBtn.textContent = "Copy link";
-      copyBtn.addEventListener("click", () => {
-         const code = pool.config.pool_code ? `?code=${encodeURIComponent(pool.config.pool_code)}` : "";
-         copyToClipboard(`${location.origin}/claim/${encodeURIComponent(pool.name)}${code}`);
-         copyBtn.textContent = "Copied!";
-         setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
-      });
-      actions.append(copyBtn);
-      if (pool.config.pool_code) {
-         const codeBtn = document.createElement("button");
-         codeBtn.className = "secondary";
-         codeBtn.textContent = `Copy code: ${pool.config.pool_code}`;
-         codeBtn.addEventListener("click", () => {
-            copyToClipboard(pool.config.pool_code);
-            codeBtn.textContent = "Copied!";
-            setTimeout(() => { codeBtn.textContent = `Copy code: ${pool.config.pool_code}`; }, 1500);
-         });
-         actions.append(codeBtn);
-      }
+      actions.append(linkBtn, lockBtn, editBtn, deleteBtn);
       const spacer = document.createElement("span");
       spacer.className = "spacer";
       const input = document.createElement("input");
@@ -193,10 +262,48 @@ async function loadPools() {
          if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
          startJob("/api/admin/redeploy", { name: pool.name, count: parseInt(input.value, 10) });
       });
-      actions.append(spacer, input, btn);
+      const group = document.createElement("div");
+      group.className = "deploy-group";
+      group.append(btn, input);
+      actions.append(spacer, group);
       card.append(actions);
-      redeployRows.appendChild(card);
+      return card;
+}
+
+function renderPools() {
+   redeployRows.innerHTML = "";
+   if (poolList.length === 0) {
+      redeployRows.textContent = "No pools.";
+      poolEmpty.hidden = true;
+      return;
    }
+   for (const pool of poolList) redeployRows.appendChild(buildPoolCard(pool));
+   applyPoolView();
+}
+
+function applyPoolView() {
+   const q = poolSearch.value.trim().toLowerCase();
+   let visible = 0;
+   for (const card of redeployRows.querySelectorAll(".pool-card")) {
+      const pool = {
+         available: parseInt(card.dataset.available, 10) || 0,
+         in_use: card.dataset.inUse === "1",
+         config: { dispenser: card.dataset.dispenser === "1", private: card.dataset.private === "1" },
+      };
+      const ok = (!q || card.dataset.name.includes(q)) && POOL_FILTERS[poolFilter](pool);
+      card.classList.toggle("hidden", !ok);
+      if (ok) visible++;
+   }
+   poolEmpty.hidden = visible > 0;
+}
+
+poolSearch.addEventListener("input", applyPoolView);
+for (const chip of document.querySelectorAll("#pool-filters .filter-chip")) {
+   chip.addEventListener("click", () => {
+      poolFilter = chip.dataset.filter;
+      for (const c of document.querySelectorAll("#pool-filters .filter-chip")) c.classList.toggle("active", c === chip);
+      applyPoolView();
+   });
 }
 
 async function updatePoolStats() {
@@ -206,9 +313,15 @@ async function updatePoolStats() {
    for (const pool of pools) {
       const card = redeployRows.querySelector(`[data-pool="${CSS.escape(pool.name)}"]`);
       if (!card) continue;
-      card.querySelector(".pool-meta").textContent = `${pool.available} available, ${pool.total} total`;
+      const count = card.querySelector(".pool-count");
+      count.textContent = `${pool.available} / ${pool.total}`;
+      count.dataset.tip = `${pool.available} available, ${pool.total} total`;
+      count.setAttribute("aria-label", `${pool.available} available, ${pool.total} total`);
+      card.dataset.available = pool.available;
+      card.dataset.inUse = pool.in_use ? "1" : "0";
       card.querySelector(".deploy-btn").disabled = runningJob !== null;
    }
+   applyPoolView();
 }
 
 function openDeployModal(pool) {
@@ -230,7 +343,7 @@ function openDeployModal(pool) {
       passwordField.placeholder = "(leave blank to keep saved)";
       provisionBtn.textContent = "Save";
    } else {
-      deployTitle.textContent = "New deployment";
+      deployTitle.textContent = "New pool";
       provisionForm.elements.pool_name.disabled = false;
       provisionForm.elements.pool_name.value = "";
       provisionForm.elements.vm_count.value = 5;
@@ -247,19 +360,23 @@ function openDeployModal(pool) {
    deployDialog.showModal();
 }
 
-async function extendVm(vmid) {
-   const res = await fetch("/api/admin/extend", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vmid, hours: 1 }),
-   });
-   if (res.ok) {
-      loadPool();
-      return;
+extendSelectedBtn.addEventListener("click", async () => {
+   const vmids = [...document.querySelectorAll(".vm-checkbox:checked")].map((el) => parseInt(el.value, 10));
+   if (!confirm(`Extend ${vmids.length} selected VM(s) by 1 hour?`)) return;
+   for (const vmid of vmids) {
+      const res = await fetch("/api/admin/extend", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ vmid, hours: 1 }),
+      });
+      if (!res.ok) {
+         const data = await res.json();
+         alert(data.detail || "Failed to extend VM.");
+         break;
+      }
    }
-   const data = await res.json();
-   alert(data.detail || "Failed to extend VM.");
-}
+   loadPool();
+});
 
 async function deletePool(pool) {
    const suffix = pool.available > 0
@@ -383,22 +500,11 @@ destroyAllBtn.addEventListener("click", () => {
    startJob("/api/admin/destroy", { mode: "all" });
 });
 
-destroyExpiredBtn.addEventListener("click", () => {
-   if (!confirm("Destroy all EXPIRED workshop VMs?")) return;
-   startJob("/api/admin/destroy", { mode: "expired" });
-});
-
 destroySelectedBtn.addEventListener("click", () => {
    const vmids = [...document.querySelectorAll(".vm-checkbox:checked")].map((el) => parseInt(el.value, 10));
-   if (vmids.length === 0) {
-      alert("Select at least one VM.");
-      return;
-   }
    if (!confirm(`Destroy ${vmids.length} selected VM(s)?`)) return;
    startJob("/api/admin/destroy", { mode: "specific", vmids });
 });
-
-refreshPoolBtn.addEventListener("click", loadPool);
 
 async function reattachJob() {
    try {

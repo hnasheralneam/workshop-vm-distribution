@@ -179,6 +179,11 @@ body.admin button.danger {
 	background: var(--danger);
 }
 
+body.admin button.danger:disabled {
+	background: var(--disabled-bg);
+	color: var(--disabled-text);
+}
+
 body.admin button.secondary {
 	background: var(--control-bg);
 	color: var(--text);
@@ -208,9 +213,55 @@ body.admin .card-header button {
 }
 
 body.admin .pool-card {
+	background: var(--bg-inset);
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	padding: 1rem;
+}
+
+body.admin .pool-card.hidden {
+	display: none;
+}
+
+body.admin .pool-toolbar {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-bottom: 0.75rem;
+}
+
+body.admin #pool-search {
+	flex: 1;
+	min-width: 12rem;
+	padding: 0.4rem 0.6rem;
+}
+
+body.admin .filter-chip {
+	font-size: 0.78rem;
+	font-weight: 500;
+	padding: 0.3rem 0.7rem;
+	background: transparent;
+	color: var(--text-muted);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+}
+
+body.admin .filter-chip:hover:not(:disabled) {
+	background: var(--control-bg);
+	color: var(--text);
+}
+
+body.admin .filter-chip.active {
+	background: var(--control-bg);
+	color: var(--text);
+	border-color: var(--control-bg);
+}
+
+body.admin .pool-empty {
+	color: var(--text-faint);
+	font-size: 0.85rem;
+	margin: 0;
 }
 
 body.admin .pool-header {
@@ -219,50 +270,132 @@ body.admin .pool-header {
 	gap: 0.5rem;
 }
 
-body.admin .pool-header h3 {
+body.admin .pool-title {
 	flex: 1;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-width: 0;
+}
+
+body.admin .pool-title h3 {
 	margin: 0;
 	font-size: 1rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+body.admin .pool-code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.75rem;
+	background: var(--control-bg);
+	color: var(--text-muted);
+	border-radius: 4px;
+	padding: 0.15rem 0.45rem;
+	margin: 0;
+}
+
+body.admin .pool-code:hover:not(:disabled) {
+	background: var(--control-hover);
+	color: var(--text);
+}
+
+body.admin .pool-count {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.9rem;
+	color: var(--text-muted);
+	flex-shrink: 0;
 }
 
 body.admin .icon-btn {
 	display: inline-flex;
 	align-items: center;
+	justify-content: center;
+	width: 2.125rem;
+	height: 2.125rem;
+	padding: 0;
 	margin-top: 0;
-	padding: 0.45rem;
+	background: transparent;
+	color: var(--text-muted);
+	border-radius: 6px;
+}
+
+body.admin .icon-btn:hover:not(:disabled) {
 	background: var(--control-bg);
 	color: var(--text);
 }
 
-body.admin .icon-btn:hover:not(:disabled) {
-	background: var(--control-hover);
-}
-
 body.admin .icon-btn:disabled {
-	background: var(--disabled-bg);
+	background: transparent;
 	color: var(--disabled-text);
 }
 
 body.admin .icon-btn svg {
+	width: 1.125rem;
+	height: 1.125rem;
+}
+
+body.admin .icon-btn.danger {
+	background: transparent;
+	color: var(--danger);
+}
+
+body.admin .pool-flag {
+	display: inline-flex;
+	flex-shrink: 0;
+	color: var(--status-available-text);
+}
+
+body.admin .pool-flag svg {
 	width: 1rem;
 	height: 1rem;
 }
 
-body.admin .icon-btn.danger {
-	background: var(--control-bg);
-	color: var(--danger);
+[data-tip] {
+	position: relative;
 }
 
-body.admin .pool-meta {
-	margin: 0.35rem 0 0;
-	color: var(--text-muted);
+[data-tip]::after {
+	content: attr(data-tip);
+	position: absolute;
+	bottom: calc(100% + 8px);
+	left: 50%;
+	transform: translateX(-50%) translateY(2px);
+	background: var(--text);
+	color: var(--bg);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 	font-size: 0.85rem;
+	font-weight: 400;
+	line-height: 1;
+	padding: 0.4rem 0.6rem;
+	border-radius: 6px;
+	white-space: nowrap;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.12s ease, transform 0.12s ease;
+	z-index: 30;
 }
 
-body.admin .pool-badge {
-	margin: 0.15rem 0 0;
-	color: var(--text-faint);
-	font-size: 0.8rem;
+[data-tip]::before {
+	content: "";
+	position: absolute;
+	bottom: calc(100% + 4px);
+	left: 50%;
+	transform: translateX(-50%) translateY(2px);
+	border: 4px solid transparent;
+	border-top-color: var(--text);
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.12s ease, transform 0.12s ease;
+	z-index: 30;
+}
+
+[data-tip]:hover::after,
+[data-tip]:hover::before {
+	opacity: 1;
+	transform: translateX(-50%) translateY(0);
+	transition-delay: 0.15s;
 }
 
 body.admin .pool-actions {
@@ -270,7 +403,9 @@ body.admin .pool-actions {
 	align-items: center;
 	flex-wrap: wrap;
 	gap: 0.5rem;
-	margin-top: 1rem;
+	margin-top: 0.85rem;
+	padding-top: 0.85rem;
+	border-top: 1px solid var(--border);
 }
 
 body.admin .pool-actions .spacer {
@@ -282,7 +417,34 @@ body.admin .pool-actions button {
 }
 
 body.admin .pool-actions input[type="number"] {
-	width: 4.5rem;
+	width: 3.25rem;
+	height: 2.125rem;
+	padding: 0 0.35rem;
+	background: var(--bg-elevated);
+	border-radius: 0 6px 6px 0;
+	text-align: center;
+}
+
+body.admin .deploy-group {
+	display: flex;
+}
+
+body.admin .deploy-group .deploy-btn {
+	height: 2.125rem;
+	padding: 0 1.1rem;
+	margin: 0;
+	border-radius: 6px 0 0 6px;
+}
+
+body.admin button.deploy-btn:hover:not(:disabled) {
+	background: var(--accent-hover);
+}
+
+body.admin button:focus-visible,
+body.admin input:focus-visible,
+body.admin select:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
 }
 
 dialog {
@@ -560,7 +722,6 @@ body.portal #code-btn:hover:not(:disabled) {
 	text-align: center;
 }
 
-
 .spinner {
 	width: 28px;
 	height: 28px;
@@ -588,7 +749,9 @@ dialog button.secondary {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
 	gap: 0.75rem;
-}#provision-dialog {
+}
+
+#provision-dialog {
 	padding-top: 1rem;
 }
 

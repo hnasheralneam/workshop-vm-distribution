@@ -713,23 +713,37 @@ def admin_provision():
     return jsonify(job_id=job["id"])
 
 
+def entry_activity(entry, now):
+    if (entry.get("claimed") or entry.get("reserved")) and not is_expired(entry):
+        return now
+    if entry.get("claimed") or entry.get("expires_at"):
+        return entry.get("expires_at") or 0
+    return entry.get("created_at") or 0
+
+
 @app.route("/api/admin/pools")
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
 def admin_pools():
     configs = load_configs()
-    counts = {}
+    now = time.time()
+    stats = {}
     for entry in poolstore.load(POOL_FILE):
         name = display_name(entry)
-        info = counts.setdefault(name, [0, 0])
-        info[0] += 1
+        info = stats.setdefault(name, {"total": 0, "available": 0, "in_use": False, "last_used": 0})
+        info["total"] += 1
         if is_available(entry):
-            info[1] += 1
+            info["available"] += 1
+        active = (entry.get("claimed") or entry.get("reserved")) and not is_expired(entry)
+        info["in_use"] = info["in_use"] or bool(active)
+        info["last_used"] = max(info["last_used"], entry_activity(entry, now))
     pools = [
         {
             "name": name,
-            "available": counts.get(name, [0, 0])[1],
-            "total": counts.get(name, [0, 0])[0],
+            "available": stats.get(name, {}).get("available", 0),
+            "total": stats.get(name, {}).get("total", 0),
+            "in_use": stats.get(name, {}).get("in_use", False),
+            "last_used": stats.get(name, {}).get("last_used", 0),
             "count": cfg.get("vm_count", 5),
             "config": {k: v for k, v in cfg.items() if k not in provision.SECRET_FIELDS},
         }
@@ -895,9 +909,20 @@ def admin_job(job_id=None):
     return jsonify(job_snapshot)
 
 
+def normalize_configs(configs):
+    used = {cfg["pool_code"] for cfg in configs.values() if cfg.get("pool_code")}
+    for name, cfg in configs.items():
+        cfg = {**{k: v for k, v in cfg.items() if k not in provision.GLOBAL_FIELDS}, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private"))}
+        if not (cfg.get("pool_code") or "").strip():
+            cfg["pool_code"] = generate_pool_code(used)
+            used.add(cfg["pool_code"])
+        configs[name] = cfg
+    return configs
+
+
 def startup():
     poolstore.update(POOL_FILE, lambda entries: [{k: v for k, v in e.items() if k != "reserved"} for e in entries])
-    poolstore.update(CONFIGS_FILE, lambda configs: {name: {**{k: v for k, v in cfg.items() if k not in provision.GLOBAL_FIELDS}, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private"))} for name, cfg in configs.items()}, dict)
+    poolstore.update(CONFIGS_FILE, normalize_configs, dict)
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         if os.getenv("RECONCILE_ORPHANS", "1") != "0":

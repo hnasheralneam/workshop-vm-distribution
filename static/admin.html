@@ -12,14 +12,6 @@
    <h1>Workshop VMs Admin</h1>
    <p class="subtitle">Provision and tear down workshop VMs</p>
 
-   <div class="card">
-      <div class="card-header">
-         <h2>Pools</h2>
-         <button type="button" id="new-deploy-btn" class="deploy-btn">New deployment</button>
-      </div>
-      <div id="redeploy-rows"></div>
-   </div>
-
    <div class="card job-status">
       <h2>Job Status</h2>
       <p id="job-status">No job running.</p>
@@ -27,12 +19,32 @@
    </div>
 
    <div class="card">
-      <h2>Virtual Machines</h2>
-      <div class="row" style="float: right; margin-bottom: 2rem;">
-         <button class="danger" id="destroy-all-btn">Destroy All</button>
-         <button class="danger" id="destroy-expired-btn">Destroy Expired</button>
-         <button class="danger" id="destroy-selected-btn">Destroy Selected</button>
-         <button class="secondary" id="refresh-pool-btn">Refresh</button>
+      <div class="card-header">
+         <h2>Pools</h2>
+         <button type="button" id="new-deploy-btn" class="deploy-btn">New pool</button>
+      </div>
+      <div class="pool-toolbar">
+         <input id="pool-search" type="search" placeholder="Search pools" autocomplete="off">
+         <div id="pool-filters">
+            <button type="button" class="filter-chip active" data-filter="all">All</button>
+            <button type="button" class="filter-chip" data-filter="in-use">In use</button>
+            <button type="button" class="filter-chip" data-filter="free">Free</button>
+            <button type="button" class="filter-chip" data-filter="dispenser">Dispenser</button>
+            <button type="button" class="filter-chip" data-filter="private">Private</button>
+         </div>
+      </div>
+      <div id="redeploy-rows"></div>
+      <p id="pool-empty" hidden>No pools match.</p>
+   </div>
+
+   <div class="card">
+      <div class="card-header">
+         <h2>Virtual Machines</h2>
+         <div class="row">
+            <button class="secondary" id="extend-selected-btn" disabled>Extend Selected</button>
+            <button class="danger" id="destroy-selected-btn" disabled>Destroy Selected</button>
+            <button class="danger" id="destroy-all-btn">Destroy All</button>
+         </div>
       </div>
       <table>
          <thead>
@@ -43,7 +55,6 @@
                <th>VM Name</th>
                <th>Status</th>
                <th>Expires</th>
-               <th>Actions</th>
             </tr>
          </thead>
          <tbody id="pool-rows"></tbody>
@@ -51,7 +62,7 @@
    </div>
 
    <dialog id="deploy-dialog">
-      <h2 id="deploy-title">New deployment</h2>
+      <h2 id="deploy-title">New pool</h2>
       <form id="provision-form">
          <label for="pool_name">Pool name</label>
          <input id="pool_name" name="pool_name" type="text" placeholder="Defaults to OS label">
@@ -95,6 +106,7 @@
       </form>
    </dialog>
 
+   <script src="/scripts/digit.js"></script>
    <script src="/scripts/admin.js"></script>
 </body>
 
