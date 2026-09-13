@@ -23,7 +23,7 @@ Edit `.env` with your Proxmox and Guacamole details:
 - `GUACAMOLE_URL`, `GUACAMOLE_INTERNAL_URL`, `GUACAMOLE_KEY`
 - `URL_OUTPUT_FILE`, `ADMIN_PASSWORD`, `LOG_FILE`
 
-Template VM id/username/password, access method, VM count, and link duration aren't in `.env`; they're entered per pool, either in the admin "New deployment" form or interactively when running `provision.py` directly.
+Template VM id/username/password, access method, VM count, and link duration aren't in `.env`; they're entered per pool, either in the admin "New pool" form or interactively when running `provision.py` directly.
 
 ## CLI Usage
 1. Provision VMs (writes `pool.json`; prompts for access method, template VM id/username/password, VM count, and link TTL):
@@ -47,7 +47,11 @@ You can deploy the whole stack with the deploy script: `sudo bash deploy/setup.s
 The main page shows one card per saved pool; picking one claims a free VM from that pool and redirects to its Guacamole session. For dispenser pools, when a claim link is loaded and the pool has none free, a fresh VM is provisioned on the spot while the page shows progress, then redirects. The "Enter pool code" button is an alternate way to claim: type a pool's code and you get a machine from that pool without picking it by name. Pools with no free vms that are not dispensers have their claim buttons disabled. Private pools are hidden from the page entirely and can only be claimed by entering their code. Each browser can hold up to 2 machines at once. The page lists your machines with per-machine Reconnect and Release buttons: Reconnect re-opens one with a fresh session token, Release immediately destroys it and frees the seat, and an expired machine is swapped for a free replacement on the next visit.
 
 ## Admin portal
-The admin page provides a web UI for provisioning and destroying VMs. You can set the `ADMIN_PASSWORD` in `.env`. On that page you can provision pools with custom configs (template, access method, VM count, VM duration, etc.), destroy all/expired/selected VMs, and watch job progress, as well as see the live pool table. Each run is saved as a named pool (in `configs.json`) that you can redeploy with one click, reconfigure, or delete from the deploy dialog. Every pool also gets a 5-character claim code that students can enter on the portal to claim from that pool. The deploy dialog also has a Dispenser checkbox: a dispenser pool provisions a fresh VM whenever someone loads its claim link and the pool has none free. The Private checkbox hides a pool from the main page so it can only be claimed with its code; a private pool must have a code.
+The admin page provides a web UI for provisioning and destroying VMs. You can set the `ADMIN_PASSWORD` in `.env`. Saved pools are listed as cards, sorted by most recent use, with a search bar and filters (all, in use, free, dispenser, private). Each card shows the pool name, its claim code with a copy button, a copy button for the student claim link, a lock that toggles the pool between public and private without opening the dialog, live usage counts, and a one-click Deploy with a VM count.
+
+You create pools with the New pool dialog: template, access method, VM count, VM duration, and the Dispenser and Private checkboxes. A dispenser pool provisions a fresh VM whenever someone loads its claim link and the pool has none free. A private pool is hidden from the main page and can only be claimed with its code; a private pool must have a code. The same dialog reconfigures or deletes an existing pool. Every pool is assigned a 5-character claim code automatically, and pools created before codes existed are backfilled at startup. Students enter that code on the portal to claim from the pool without picking it by name.
+
+Below the pools is the live VM table (grouped by pool) with extend and destroy actions for selected or all VMs, plus a job log while provisioning or destroying runs.
 
 ## Notes
 State lives in `pool.json` (claims + per-VM credentials) and `configs.json` (saved pools); both are gitignored. Server, provisioning, and teardown output also goes to `server.log`; set `LOG_FILE` to change the location.
