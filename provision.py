@@ -224,8 +224,12 @@ def wait_for_port(ip, port):
     while time.time() < deadline:
         try:
             with socket.create_connection((ip, port), timeout=2):
-                time.sleep(2)
-                return True
+                pass
+            time.sleep(4)
+            with socket.create_connection((ip, port), timeout=2):
+                pass
+            time.sleep(2)
+            return True
         except (ConnectionRefusedError, socket.timeout, OSError):
             time.sleep(3)
     raise TimeoutError(f"Port {port} on {ip} did not open within 120 seconds")
