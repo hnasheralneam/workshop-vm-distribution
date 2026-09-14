@@ -235,6 +235,11 @@ def wait_for_port(ip, port):
     raise TimeoutError(f"Port {port} on {ip} did not open within 120 seconds")
 
 
+def ensure_not_template(node, vmid):
+    if node.qemu(vmid).config.get().get("template"):
+        raise RuntimeError(f"VM {vmid} is a template and will never be destroyed")
+
+
 def provision_worker(proxmox, config, vmid, student_id, log):
     node = proxmox.nodes(config["proxmox_node"])
     access_method = config["template_vm_access_method"]
@@ -263,6 +268,7 @@ def provision_worker(proxmox, config, vmid, student_id, log):
         except Exception:
             pass
         try:
+            ensure_not_template(node, vmid)
             node.qemu(vmid).delete()
         except Exception:
             pass

@@ -6,7 +6,7 @@ import os
 
 import applog
 import poolstore
-from provision import build_config, get_proxmox_client
+from provision import build_config, get_proxmox_client, ensure_not_template
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,13 +17,14 @@ WORKSHOP_PREFIX = "workshop-"
 
 def list_workshop_vms(proxmox, node):
     all_vms = proxmox.nodes(node).qemu.get()
-    return [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX)]
+    return [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX) and not vm.get('template')]
 
 
 def destroy_worker(proxmox, node_name, vmid, vm_name, log):
     node = proxmox.nodes(node_name)
 
     try:
+        ensure_not_template(node, vmid)
         current_status = node.qemu(vmid).status.current.get()
 
         # Proxmox won't delete a running VM

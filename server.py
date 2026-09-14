@@ -190,45 +190,6 @@ def sweep_ghost_vms():
     applog.log.info(f"Sweep: pruned {len(ghost_vmids)} ghost VM(s) from pool.json")
 
 
-def reconcile_orphans():
-    """Destroys live workshop VMs that pool.json does not track."""
-    with job_lock:
-        job_running = any(j and j["status"] == "running" for j in jobs.values())
-    if job_running:
-        applog.log.info("Reconcile: skipping, an admin job is running")
-        return
-    try:
-        tracked = {entry["vmid"] for entry in poolstore.load(POOL_FILE)}
-    except (OSError, json.JSONDecodeError):
-        tracked = set()
-    if not tracked:
-        applog.log.info("Reconcile: pool.json tracks no VMs, skipping")
-        return
-    targets = {}
-    for name in load_configs():
-        try:
-            config = proxmox_target_for_pool(name)
-        except Exception as exc:
-            applog.log.info(f"Reconcile: skipping pool {name!r}: {exc}")
-            continue
-        targets.setdefault((config["proxmox_host"], config["proxmox_node"]), config)
-    for (host, node), config in targets.items():
-        try:
-            proxmox = destroy.get_proxmox_client(config)
-            live = destroy.list_workshop_vms(proxmox, node)
-        except Exception as exc:
-            applog.log.info(f"Reconcile: could not list live VMs for {host}/{node}: {exc}")
-            continue
-        for vm in live:
-            if vm["vmid"] in tracked:
-                continue
-            try:
-                destroy.destroy_worker(proxmox, node, vm["vmid"], vm["name"], applog.log.info)
-                applog.log.info(f"Reconcile: destroyed orphaned VM {vm['vmid']} ({vm['name']})")
-            except Exception as exc:
-                applog.log.info(f"Reconcile: destroying orphaned VM {vm['vmid']} failed: {exc}")
-
-
 def reap_expired_vms():
     """Destroys expired VMs; run_teardown also prunes them from pool.json."""
     while True:
@@ -925,8 +886,6 @@ def startup():
     poolstore.update(CONFIGS_FILE, normalize_configs, dict)
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
-        if os.getenv("RECONCILE_ORPHANS", "1") != "0":
-            threading.Thread(target=reconcile_orphans, daemon=True).start()
         threading.Thread(target=reap_expired_vms, daemon=True).start()
 
 
