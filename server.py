@@ -29,6 +29,7 @@ POOL_FILE = BASE_DIR / "pool.json"
 CONFIGS_FILE = BASE_DIR / "configs.json"
 REAP_INTERVAL_SECONDS = 60
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+MAX_VMS = int(os.getenv("MAX_VMS", "2"))
 
 app = Flask(__name__, static_folder=None)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
@@ -250,7 +251,7 @@ def types():
         name = display_name(entry)
         group = pools.setdefault(name, {"name": name, "available": 0, "dispenser": False, "private": False})
         group["available"] += 1
-    return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated_pools()))
+    return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated_pools()), max_vms=MAX_VMS)
 
 
 @app.route("/api/claim", methods=["POST"])

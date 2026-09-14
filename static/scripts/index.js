@@ -1,7 +1,8 @@
-const MAX_VMS = 2;
+let MAX_VMS = 2;
 const PROVISION_TIMEOUT_MS = 600000;
 const buttonsContainer = document.getElementById("claim-buttons");
 const status = document.getElementById("status-message");
+const subtitle = document.getElementById("portal-subtitle");
 const vmsHeading = document.getElementById("vms-heading");
 const vmsContainer = document.getElementById("vms");
 const codeBtn = document.getElementById("code-btn");
@@ -12,6 +13,7 @@ const codeError = document.getElementById("code-error");
 const codeSubmitBtn = document.getElementById("code-submit-btn");
 const codeCancelBtn = document.getElementById("code-cancel-btn");
 const swapDialog = document.getElementById("swap-dialog");
+const swapSubtitle = document.getElementById("swap-subtitle");
 const swapOptions = document.getElementById("swap-options");
 const swapError = document.getElementById("swap-error");
 const swapCancelBtn = document.getElementById("swap-cancel-btn");
@@ -130,10 +132,16 @@ function setButtonsDisabled(disabled) {
 	}
 }
 
+function applyTypes(data) {
+	MAX_VMS = data.max_vms || 2;
+	subtitle.innerText = `Claim up to ${MAX_VMS} personal workshop VMs below.`;
+}
+
 async function loadPoolButtons() {
 	try {
 		const response = await fetch("/api/types");
 		const data = await response.json();
+		applyTypes(data);
 		codeBtn.hidden = !(data.coded > 0);
 		const pools = (data.pools || []).filter((p) => !p.private && (p.dispenser || p.available > 0));
 		if (pools.length > 1) {
@@ -291,6 +299,7 @@ async function init() {
 
 	if (claimLabel) {
 		renderButtons([{ text: `Claim ${claimLabel}`, name: claimLabel }]);
+		fetch("/api/types").then((r) => r.json()).then(applyTypes).catch(() => {});
 		if (vms.length === 0) handleTerminalAccess(claimLabel);
 		return;
 	}
@@ -599,6 +608,7 @@ function openCodeDialog() {
 function openSwapModal(claimFn) {
 	pendingClaim = claimFn;
 	swapError.textContent = "";
+	swapSubtitle.innerText = `You already have ${MAX_VMS} machines. Release one to claim another.`;
 	swapOptions.innerHTML = "";
 	for (const vm of vms) {
 		const row = document.createElement("div");
