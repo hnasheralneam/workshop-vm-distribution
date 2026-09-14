@@ -61,6 +61,10 @@
       </table>
    </div>
 
+   <p class="page-footer">
+      <button type="button" id="logs-btn" class="secondary">View server logs</button>
+   </p>
+
    <dialog id="deploy-dialog">
       <h2 id="deploy-title">New pool</h2>
       <form id="provision-form">
@@ -104,6 +108,19 @@
             <button type="submit" id="provision-btn">Provision</button>
          </div>
       </form>
+   </dialog>
+
+   <dialog id="logs-dialog">
+      <h2>Server log</h2>
+      <div class="logs-toolbar">
+         <input id="log-search" type="search" placeholder="Search lines" autocomplete="off">
+         <button type="button" id="logs-refresh-btn" class="secondary">Refresh</button>
+      </div>
+      <div id="server-log"></div>
+      <p id="log-count" class="hint"></p>
+      <div class="modal-actions">
+         <button type="button" class="secondary" id="logs-close-btn">Close</button>
+      </div>
    </dialog>
 
    <script src="/scripts/digit.js"></script>

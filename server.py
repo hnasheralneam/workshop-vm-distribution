@@ -2,6 +2,7 @@ import hmac
 import json
 import os
 import random
+import re
 import secrets
 import threading
 import time
@@ -868,6 +869,18 @@ def admin_job(job_id=None):
             return jsonify(detail="No such job."), 404
         job_snapshot = {k: v for k, v in job.items()}
     return jsonify(job_snapshot)
+
+
+@app.route("/api/admin/logs")
+@limiter.limit(ADMIN_LIMIT)
+@admin_required
+def admin_logs():
+    try:
+        with open(applog.LOG_FILE, errors="replace") as f:
+            lines = f.readlines()[-1000:]
+    except OSError:
+        lines = []
+    return jsonify(lines=[re.sub(r"\x1b\[[0-9;]*m", "", line.rstrip("\n")) for line in lines])
 
 
 def normalize_configs(configs):

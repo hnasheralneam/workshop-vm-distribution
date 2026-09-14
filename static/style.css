@@ -508,7 +508,8 @@ body.admin tr.hidden {
 	display: none;
 }
 
-body.admin #job-log {
+body.admin #job-log,
+body.admin #server-log {
 	background: var(--bg-inset);
 	border: 1px solid var(--border);
 	border-radius: 8px;
@@ -519,6 +520,36 @@ body.admin #job-log {
 	white-space: pre-wrap;
 	max-height: 300px;
 	overflow-y: auto;
+}
+
+body.admin #server-log {
+	margin-top: 0.75rem;
+	max-height: 55vh;
+}
+
+body.admin .logs-toolbar {
+	display: flex;
+	gap: 0.5rem;
+	margin-top: 0.75rem;
+	text-align: left;
+}
+
+body.admin .logs-toolbar input {
+	flex: 1;
+}
+
+body.admin .page-footer {
+	text-align: center;
+	margin-top: 1.5rem;
+}
+
+#logs-dialog {
+	width: min(900px, 92vw);
+	text-align: left;
+}
+
+#logs-dialog h2 {
+	margin: 0;
 }
 
 body.admin .hint {

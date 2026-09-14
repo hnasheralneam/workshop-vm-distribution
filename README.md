@@ -51,7 +51,7 @@ The admin page provides a web UI for provisioning and destroying VMs. You can se
 
 You create pools with the New pool dialog: template, access method, VM count, VM duration, and the Dispenser and Private checkboxes. A dispenser pool provisions a fresh VM whenever someone loads its claim link and the pool has none free. A private pool is hidden from the main page and can only be claimed with its code; a private pool must have a code. The same dialog reconfigures or deletes an existing pool. Every pool is assigned a 5-character claim code automatically, and pools created before codes existed are backfilled at startup. Students enter that code on the portal to claim from the pool without picking it by name.
 
-Below the pools is the live VM table (grouped by pool) with extend and destroy actions for selected or all VMs, plus a job log while provisioning or destroying runs.
+Below the pools is the live VM table (grouped by pool) with extend and destroy actions for selected or all VMs, plus a job log while provisioning or destroying runs. A View server logs button at the bottom of the page opens the last 1000 lines of `server.log` in a modal with a search box that filters lines as you type.
 
 ## Notes
 State lives in `pool.json` (claims + per-VM credentials) and `configs.json` (saved pools); both are gitignored. Server, provisioning, and teardown output also goes to `server.log`; set `LOG_FILE` to change the location.

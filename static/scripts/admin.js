@@ -15,10 +15,18 @@ const dispenserInput = document.getElementById("dispenser");
 const privateInput = document.getElementById("private");
 const poolSearch = document.getElementById("pool-search");
 const poolEmpty = document.getElementById("pool-empty");
+const logsBtn = document.getElementById("logs-btn");
+const logsDialog = document.getElementById("logs-dialog");
+const logsRefreshBtn = document.getElementById("logs-refresh-btn");
+const logsCloseBtn = document.getElementById("logs-close-btn");
+const logSearch = document.getElementById("log-search");
+const serverLog = document.getElementById("server-log");
+const logCount = document.getElementById("log-count");
 
 let pollHandle = null;
 let runningJob = null;
 let editingPool = null;
+let logLines = [];
 const collapsedPools = new Set();
 
 const ICONS = {
@@ -520,6 +528,39 @@ async function reattachJob() {
       pollJob(job.id);
    } catch (error) {}
 }
+
+function renderLogs() {
+   const query = logSearch.value.trim().toLowerCase();
+   const matches = query ? logLines.filter((line) => line.toLowerCase().includes(query)) : logLines;
+   serverLog.textContent = matches.join("\n");
+   serverLog.scrollTop = serverLog.scrollHeight;
+   logCount.textContent = query ? `${matches.length} of ${logLines.length} lines` : `${logLines.length} lines`;
+}
+
+async function loadLogs() {
+   logCount.textContent = "Loading...";
+   try {
+      const res = await fetch("/api/admin/logs");
+      if (!res.ok) throw new Error();
+      logLines = (await res.json()).lines;
+      renderLogs();
+   } catch (error) {
+      logCount.textContent = "Failed to load logs.";
+   }
+}
+
+logsBtn.addEventListener("click", () => {
+   logsDialog.showModal();
+   serverLog.textContent = "";
+   logSearch.value = "";
+   loadLogs();
+});
+logsRefreshBtn.addEventListener("click", loadLogs);
+logsCloseBtn.addEventListener("click", () => logsDialog.close());
+logsDialog.addEventListener("click", (e) => {
+   if (e.target === logsDialog) logsDialog.close();
+});
+logSearch.addEventListener("input", renderLogs);
 
 loadPool();
 loadPools();
