@@ -137,7 +137,7 @@ function applyTypes(data) {
 	subtitle.innerText = `Claim up to ${MAX_VMS} personal workshop VMs below.`;
 }
 
-async function loadPoolButtons() {
+async function loadPoolButtons(attempt = 0) {
 	try {
 		const response = await fetch("/api/types");
 		const data = await response.json();
@@ -154,7 +154,12 @@ async function loadPoolButtons() {
 		}
 	} catch (error) {
 		renderButtons([{ text: "Claim", name: null }]);
-		setStatus("Could not load the pool list. You can still try claiming below.", "error");
+		codeBtn.hidden = false;
+		if (attempt < 2) {
+			setTimeout(() => loadPoolButtons(attempt + 1), 5000);
+		} else {
+			setStatus("Could not load the pool list. You can still try claiming below.", "error");
+		}
 	}
 }
 
