@@ -54,13 +54,8 @@ def is_available(entry):
     return not entry["claimed"] and not entry.get("reserved") and not is_expired(entry)
 
 
-def os_type(entry):
-    """rdp is Windows; ssh/vnc/unset is Linux."""
-    return "windows" if entry.get("access_method") == "rdp" else "linux"
-
-
-def display_name(entry):
-    return entry.get("pool") or ("Windows" if entry.get("access_method") == "rdp" else "Linux")
+def entry_ref(entry):
+    return entry.get("pool_code") or entry.get("pool")
 
 
 def load_configs():
@@ -74,12 +69,17 @@ def load_configs():
 
 
 def entry_ttl(entry):
-    config = load_configs().get(entry.get("pool"))
+    config = load_configs().get(entry_ref(entry))
     return (config or {}).get("guac_link_ttl_seconds", 7200)
 
 
 def config_pool_name(config):
     return config.get("pool_name") or ("Windows" if config.get("template_vm_access_method") == "rdp" else "Linux")
+
+
+def ref_label(configs, ref):
+    config = configs.get(ref)
+    return config_pool_name(config) if config else ref
 
 
 CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
@@ -92,8 +92,8 @@ def generate_pool_code(used):
             return code
 
 
-def gated_pools():
-    return {name for name, cfg in load_configs().items() if cfg.get("pool_code")}
+def normalize_code(code):
+    return (code or "").strip().upper()
 
 
 def unreserve(entries, vmid):
@@ -155,8 +155,8 @@ def mint_or_prune(entry, ttl, pool_predicate, log_prefix):
 GHOST_SWEEP_GRACE_SECONDS = 120
 
 
-def proxmox_target_for_pool(pool_name):
-    config = load_configs().get(pool_name) or {}
+def proxmox_target_for_pool(ref):
+    config = load_configs().get(ref) or {}
     return provision.build_config(config)
 
 
@@ -164,11 +164,11 @@ def sweep_ghost_vms():
     """Prunes pool.json entries whose VM was removed from Proxmox externally."""
     configs = load_configs()
     entries = poolstore.load(POOL_FILE)
-    eligible = [e for e in entries if e.get("pool") in configs and time.time() - e.get("created_at", 0) >= GHOST_SWEEP_GRACE_SECONDS]
+    eligible = [e for e in entries if entry_ref(e) in configs and time.time() - e.get("created_at", 0) >= GHOST_SWEEP_GRACE_SECONDS]
 
     by_target = {}
     for entry in eligible:
-        config = proxmox_target_for_pool(entry.get("pool"))
+        config = proxmox_target_for_pool(entry_ref(entry))
         key = (config["proxmox_host"], config["proxmox_node"])
         by_target.setdefault(key, (config, []))[1].append(entry)
 
@@ -222,6 +222,11 @@ def index():
     return send_from_directory(BASE_DIR / "static", "index.html")
 
 
+@app.route("/claim")
+def claim_page():
+    return send_from_directory(BASE_DIR / "static", "index.html")
+
+
 @app.route("/claim/<path:label>")
 def claim_link(label):
     return send_from_directory(BASE_DIR / "static", "index.html")
@@ -244,40 +249,36 @@ def images(filename):
 
 @app.route("/api/types")
 def types():
-    pools = {name: {"name": name, "available": 0, "dispenser": bool(config.get("dispenser")), "private": bool(config.get("private"))} for name, config in load_configs().items()}
+    configs = load_configs()
+    pools = {}
+    for code, config in configs.items():
+        pools[code] = {"name": config_pool_name(config), "code": None if config.get("private") else code, "available": 0, "dispenser": bool(config.get("dispenser")), "private": bool(config.get("private"))}
     for entry in poolstore.load(POOL_FILE):
         if not is_available(entry):
             continue
-        name = display_name(entry)
-        group = pools.setdefault(name, {"name": name, "available": 0, "dispenser": False, "private": False})
+        ref = entry_ref(entry)
+        group = pools.setdefault(ref, {"name": ref, "code": None, "available": 0, "dispenser": False, "private": False})
         group["available"] += 1
-    return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(gated_pools()), max_vms=MAX_VMS)
+    return jsonify(pools=sorted(pools.values(), key=lambda p: p["name"]), coded=len(configs), max_vms=MAX_VMS)
 
 
 @app.route("/api/claim", methods=["POST"])
 @limiter.limit("10/minute")
 def claim():
     body = request.get_json(silent=True) or {}
-    requested_pool = body.get("pool")
-    requested_os = body.get("os")
+    if body.get("code"):
+        config = find_pool_by_code(body.get("code"))
+        if config is None:
+            return jsonify(detail="Unknown code."), 404
+        return claim_from_pool(config)
 
     configs = load_configs()
-    if requested_pool:
-        config = configs.get(requested_pool)
-        if config and config.get("private") and not code_matches(config, body.get("code")):
-            return jsonify(detail="This pool requires a valid code.", code_required=True), 403
-    private_pools = {name for name, cfg in configs.items() if cfg.get("private")}
+    private_refs = {code for code, cfg in configs.items() if cfg.get("private")}
 
     state = {}
 
     def reserve(entries):
-        available = [entry for entry in entries if is_available(entry)]
-        if requested_pool:
-            available = [entry for entry in available if display_name(entry) == requested_pool]
-        else:
-            available = [entry for entry in available if display_name(entry) not in private_pools]
-            if requested_os:
-                available = [entry for entry in available if os_type(entry) == requested_os]
+        available = [entry for entry in entries if is_available(entry) and entry_ref(entry) not in private_refs]
         if available:
             entry = random.choice(available)
             entry["reserved"] = True
@@ -286,27 +287,12 @@ def claim():
 
     poolstore.update(POOL_FILE, reserve)
     if "entry" not in state:
-        config = configs.get(requested_pool or "")
-        if not config or not config.get("dispenser"):
-            if requested_pool and requested_pool not in configs:
-                return jsonify(detail=f"Unknown pool {requested_pool!r}."), 404
-            if requested_pool:
-                return jsonify(detail=f"No VMs available in pool {requested_pool!r} right now."), 404
-            return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
-        ticket = str(uuid.uuid4())
-        with ticket_lock:
-            redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
-        threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
-        return jsonify(status="provisioning", ticket=ticket, pool=requested_pool), 202
+        return jsonify(detail="No VMs available right now. Please contact your instructor."), 404
 
     entry = state["entry"]
 
     def predicate(e):
-        if not is_available(e):
-            return False
-        if requested_pool:
-            return display_name(e) == requested_pool
-        return not requested_os or os_type(e) == requested_os
+        return is_available(e) and entry_ref(e) not in private_refs
 
     url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
     if url is None:
@@ -314,6 +300,41 @@ def claim():
 
     poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
     return jsonify(url=url, expires_at=final_entry.get("expires_at"))
+
+
+def claim_from_pool(config):
+    code = normalize_code(config.get("pool_code"))
+    pool_name = config_pool_name(config)
+    state = {}
+
+    def reserve(entries):
+        available = [entry for entry in entries if is_available(entry) and entry_ref(entry) == code]
+        if available:
+            entry = random.choice(available)
+            entry["reserved"] = True
+            state["entry"] = entry
+        return entries
+
+    poolstore.update(POOL_FILE, reserve)
+    if "entry" in state:
+        entry = state["entry"]
+
+        def predicate(e):
+            return is_available(e) and entry_ref(e) == code
+
+        url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
+        if url is None:
+            return jsonify(detail="VM is not reachable right now. Please try again."), 502
+        poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
+        return jsonify(status="ready", url=url, pool=pool_name, expires_at=final_entry.get("expires_at"))
+
+    if not config.get("dispenser"):
+        return jsonify(detail=f"No VMs available in pool {pool_name!r} right now."), 404
+    ticket = str(uuid.uuid4())
+    with ticket_lock:
+        redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
+    threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
+    return jsonify(status="provisioning", ticket=ticket, pool=pool_name), 202
 
 
 @app.route("/api/validate", methods=["POST"])
@@ -338,9 +359,8 @@ def validate():
             state["gone"] = True
             return current
         expired["claimed"] = False
-        available = [e for e in current if is_available(e) and display_name(e) == display_name(expired)]
-        if not available:
-            available = [e for e in current if is_available(e) and os_type(e) == os_type(expired)]
+        ref = entry_ref(expired)
+        available = [e for e in current if is_available(e) and entry_ref(e) == ref]
         if available:
             replacement = random.choice(available)
             replacement["reserved"] = True
@@ -354,11 +374,10 @@ def validate():
         return jsonify(valid=False, expired=True)
 
     replacement = state["entry"]
-    expired_name = display_name(replacement)
-    expired_os = os_type(replacement)
+    ref = entry_ref(replacement)
 
     def predicate(e):
-        return is_available(e) and (display_name(e) == expired_name or os_type(e) == expired_os)
+        return is_available(e) and entry_ref(e) == ref
 
     fresh, final_entry = mint_or_prune(replacement, entry_ttl(replacement), predicate, "Validate")
     if fresh is None:
@@ -464,19 +483,11 @@ def set_ticket(ticket, **fields):
                 threading.Timer(retention, drop_ticket, args=(ticket,)).start()
 
 
-def code_matches(config, code):
-    code = (code or "").strip().upper()
-    if not code or not code.isascii():
-        return False
-    stored = (config.get("pool_code") or "").strip().upper()
-    return bool(stored) and hmac.compare_digest(stored, code)
-
-
 def find_pool_by_code(code):
-    for config in load_configs().values():
-        if code_matches(config, code):
-            return config
-    return None
+    code = normalize_code(code)
+    if not code:
+        return None
+    return load_configs().get(code)
 
 
 def run_redeem_provision(ticket, config):
@@ -503,7 +514,7 @@ def run_redeem_provision(ticket, config):
             "claimed": True,
             "expires_at": expires_at,
             "access_method": config["template_vm_access_method"],
-            "pool": pool_name,
+            "pool_code": normalize_code(config.get("pool_code")),
             "template_vm_username": config["template_vm_username"],
             "template_vm_password": config["template_vm_password"],
             "created_at": time.time(),
@@ -529,36 +540,7 @@ def redeem():
     config = find_pool_by_code(body.get("code"))
     if config is None:
         return jsonify(detail="Unknown code."), 404
-
-    pool_name = config_pool_name(config)
-    state = {}
-
-    def reserve(entries):
-        available = [entry for entry in entries if is_available(entry) and display_name(entry) == pool_name]
-        if available:
-            entry = random.choice(available)
-            entry["reserved"] = True
-            state["entry"] = entry
-        return entries
-
-    poolstore.update(POOL_FILE, reserve)
-    if "entry" in state:
-        entry = state["entry"]
-
-        def predicate(e):
-            return is_available(e) and display_name(e) == pool_name
-
-        url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Redeem")
-        if url is None:
-            return jsonify(detail="VM is not reachable right now. Please try again."), 502
-        poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
-        return jsonify(status="ready", url=url, pool=pool_name, expires_at=final_entry.get("expires_at"))
-
-    ticket = str(uuid.uuid4())
-    with ticket_lock:
-        redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
-    threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
-    return jsonify(status="provisioning", ticket=ticket, pool=pool_name), 202
+    return claim_from_pool(config)
 
 
 @app.route("/api/redeem/<ticket>", methods=["GET"])
@@ -637,11 +619,12 @@ def admin_page():
 @admin_required
 def admin_pool():
     entries = []
+    configs = load_configs()
     for entry in poolstore.load(POOL_FILE):
         entries.append({
             "vmid": entry.get("vmid"),
             "student_id": entry.get("student_id"),
-            "pool": display_name(entry),
+            "pool": ref_label(configs, entry_ref(entry)),
             "url": entry.get("url"),
             "claimed": entry.get("claimed") or entry.get("reserved"),
             "expired": is_expired(entry),
@@ -664,8 +647,8 @@ def admin_provision():
     count = config["vm_count"]
 
     def save(configs):
-        config["pool_code"] = generate_pool_code({c.get("pool_code") for c in configs.values()})
-        configs[config_pool_name(config)] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
+        config["pool_code"] = generate_pool_code({normalize_code(c.get("pool_code")) for c in configs.values()})
+        configs[config["pool_code"]] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
         return configs
 
     poolstore.update(CONFIGS_FILE, save, dict)
@@ -692,8 +675,8 @@ def admin_pools():
     now = time.time()
     stats = {}
     for entry in poolstore.load(POOL_FILE):
-        name = display_name(entry)
-        info = stats.setdefault(name, {"total": 0, "available": 0, "in_use": False, "last_used": 0})
+        ref = entry_ref(entry)
+        info = stats.setdefault(ref, {"total": 0, "available": 0, "in_use": False, "last_used": 0})
         info["total"] += 1
         if is_available(entry):
             info["available"] += 1
@@ -702,67 +685,70 @@ def admin_pools():
         info["last_used"] = max(info["last_used"], entry_activity(entry, now))
     pools = [
         {
-            "name": name,
-            "available": stats.get(name, {}).get("available", 0),
-            "total": stats.get(name, {}).get("total", 0),
-            "in_use": stats.get(name, {}).get("in_use", False),
-            "last_used": stats.get(name, {}).get("last_used", 0),
+            "name": ref_label(configs, code),
+            "code": code,
+            "available": stats.get(code, {}).get("available", 0),
+            "total": stats.get(code, {}).get("total", 0),
+            "in_use": stats.get(code, {}).get("in_use", False),
+            "last_used": stats.get(code, {}).get("last_used", 0),
             "count": cfg.get("vm_count", 5),
             "config": {k: v for k, v in cfg.items() if k not in provision.SECRET_FIELDS},
         }
-        for name, cfg in sorted(configs.items())
+        for code, cfg in sorted(configs.items(), key=lambda item: ref_label(configs, item[0]))
     ]
     return jsonify(pools)
 
 
-@app.route("/api/admin/pools/<path:name>", methods=["PUT"])
+@app.route("/api/admin/pools/<code>", methods=["PUT"])
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
-def admin_update_pool(name):
+def admin_update_pool(code):
     body = request.get_json(silent=True) or {}
-    saved = load_configs().get(name)
+    saved = load_configs().get(code)
     if saved is None:
-        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
-    if body.get("private") and not (saved.get("pool_code") or "").strip():
-        return jsonify(detail="Private pools require a pool code."), 400
+        return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
 
-    overrides = {k: v for k, v in body.items() if k not in ("pool_name", "pool_code") and v not in (None, "")}
+    overrides = {k: v for k, v in body.items() if k != "pool_code" and v not in (None, "")}
     try:
         config = provision.build_config({**saved, **overrides})
         provision.require_template_fields(config)
     except (ValueError, TypeError) as exc:
         return jsonify(detail=f"Invalid configuration: {exc}"), 400
 
+    new_name = config_pool_name(config)
+    if new_name != config_pool_name(saved) and any(ref != code and config_pool_name(other) == new_name for ref, other in load_configs().items()):
+        return jsonify(detail=f"A pool named {new_name!r} already exists."), 400
+
     state = {}
 
     def replace(configs):
-        if name in configs:
-            configs[name] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
+        if code in configs:
+            configs[code] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
             state["done"] = True
         return configs
 
     poolstore.update(CONFIGS_FILE, replace, dict)
     if not state.get("done"):
-        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+        return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
     return jsonify({k: v for k, v in config.items() if k not in provision.SECRET_FIELDS})
 
 
-@app.route("/api/admin/pools/<path:name>", methods=["DELETE"])
+@app.route("/api/admin/pools/<code>", methods=["DELETE"])
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
-def admin_delete_pool(name):
+def admin_delete_pool(code):
     state = {}
 
     def remove(configs):
-        if name in configs:
-            del configs[name]
+        if code in configs:
+            del configs[code]
             state["done"] = True
         return configs
 
     poolstore.update(CONFIGS_FILE, remove, dict)
     if not state.get("done"):
-        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
-    return jsonify(deleted=name)
+        return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
+    return jsonify(deleted=code)
 
 
 @app.route("/api/admin/redeploy", methods=["POST"])
@@ -770,10 +756,10 @@ def admin_delete_pool(name):
 @admin_required
 def admin_redeploy():
     body = request.get_json(silent=True) or {}
-    name = body.get("name")
-    config = load_configs().get(name)
+    code = body.get("code")
+    config = load_configs().get(code)
     if config is None:
-        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+        return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
 
     count = body.get("count")
     try:
@@ -786,8 +772,8 @@ def admin_redeploy():
     state = {}
 
     def save(configs):
-        if name in configs:
-            configs[name]["vm_count"] = count
+        if code in configs:
+            configs[code]["vm_count"] = count
             state["done"] = True
         return configs
 
@@ -800,7 +786,7 @@ def admin_redeploy():
 
     poolstore.update(CONFIGS_FILE, save, dict)
     if not state.get("done"):
-        return jsonify(detail=f"No saved configuration for pool {name!r}."), 404
+        return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
 
     job = start_job("provision", provision.run_parallel_provisioning, config, count)
     if job is None:
@@ -885,19 +871,38 @@ def admin_logs():
 
 
 def normalize_configs(configs):
-    used = {cfg["pool_code"] for cfg in configs.values() if cfg.get("pool_code")}
-    for name, cfg in configs.items():
+    normalized = {}
+    used = set()
+    for cfg in configs.values():
         cfg = {**{k: v for k, v in cfg.items() if k not in provision.GLOBAL_FIELDS}, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private"))}
-        if not (cfg.get("pool_code") or "").strip():
-            cfg["pool_code"] = generate_pool_code(used)
-            used.add(cfg["pool_code"])
-        configs[name] = cfg
-    return configs
+        code = normalize_code(cfg.get("pool_code"))
+        if not code:
+            applog.log.warning(f"Pool {config_pool_name(cfg)!r} has no pool code; add one in configs.json to make it claimable.")
+            normalized.setdefault(f"?{config_pool_name(cfg)}", cfg)
+            continue
+        if code in used:
+            old = code
+            code = generate_pool_code(used)
+            applog.log.warning(f"Duplicate pool code {old} regenerated as {code}.")
+        cfg["pool_code"] = code
+        used.add(code)
+        normalized[code] = cfg
+    return normalized
+
+
+def migrate_pool_entries(entries, configs):
+    by_name = {cfg.get("pool_name"): ref for ref, cfg in configs.items() if cfg.get("pool_name") and not ref.startswith("?")}
+    for entry in entries:
+        ref = by_name.get(entry.get("pool"))
+        if ref:
+            entry["pool_code"] = ref
+            del entry["pool"]
+    return entries
 
 
 def startup():
-    poolstore.update(POOL_FILE, lambda entries: [{k: v for k, v in e.items() if k != "reserved"} for e in entries])
-    poolstore.update(CONFIGS_FILE, normalize_configs, dict)
+    configs = poolstore.update(CONFIGS_FILE, normalize_configs, dict)
+    poolstore.update(POOL_FILE, lambda entries: migrate_pool_entries([{k: v for k, v in e.items() if k != "reserved"} for e in entries], configs))
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()

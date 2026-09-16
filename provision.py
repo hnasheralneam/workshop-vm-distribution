@@ -362,7 +362,7 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
     access_method = config["template_vm_access_method"]
     new_entries = [
         {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e,
-         "access_method": access_method, "pool": config["pool_name"],
+         "access_method": access_method, "pool_code": config.get("pool_code") or "",
          "template_vm_username": config["template_vm_username"],
          "template_vm_password": config["template_vm_password"],
          "created_at": time.time()}

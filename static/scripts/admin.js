@@ -162,7 +162,7 @@ async function loadPools() {
 function buildPoolCard(pool) {
       const card = document.createElement("div");
       card.className = "pool-card";
-      card.dataset.pool = pool.name;
+      card.dataset.pool = pool.code;
       card.dataset.name = pool.name.toLowerCase();
       card.dataset.available = pool.available;
       card.dataset.inUse = pool.in_use ? "1" : "0";
@@ -211,8 +211,7 @@ function buildPoolCard(pool) {
       linkBtn.setAttribute("aria-label", "Copy claim link");
       linkBtn.innerHTML = ICONS.link;
       linkBtn.addEventListener("click", () => {
-         const code = pool.config.pool_code ? `?code=${encodeURIComponent(pool.config.pool_code)}` : "";
-         copyToClipboard(`${location.origin}/claim/${encodeURIComponent(pool.name)}${code}`);
+         copyToClipboard(`${location.origin}/claim?code=${encodeURIComponent(pool.code)}`);
          linkBtn.innerHTML = ICONS.check;
          setTimeout(() => { linkBtn.innerHTML = ICONS.link; }, 1500);
       });
@@ -227,7 +226,7 @@ function buildPoolCard(pool) {
       };
       syncLock();
       lockBtn.addEventListener("click", async () => {
-         const res = await fetch(`/api/admin/pools/${encodeURIComponent(pool.name)}`, {
+         const res = await fetch(`/api/admin/pools/${encodeURIComponent(pool.code)}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ private: !pool.config.private }),
@@ -268,7 +267,7 @@ function buildPoolCard(pool) {
       btn.textContent = "Deploy";
       btn.addEventListener("click", () => {
          if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
-         startJob("/api/admin/redeploy", { name: pool.name, count: parseInt(input.value, 10) });
+         startJob("/api/admin/redeploy", { code: pool.code, count: parseInt(input.value, 10) });
       });
       const group = document.createElement("div");
       group.className = "deploy-group";
@@ -319,7 +318,7 @@ async function updatePoolStats() {
    if (!res.ok) return;
    const pools = await res.json();
    for (const pool of pools) {
-      const card = redeployRows.querySelector(`[data-pool="${CSS.escape(pool.name)}"]`);
+      const card = redeployRows.querySelector(`[data-pool="${CSS.escape(pool.code)}"]`);
       if (!card) continue;
       const count = card.querySelector(".pool-count");
       count.textContent = `${pool.available} / ${pool.total}`;
@@ -339,7 +338,6 @@ function openDeployModal(pool) {
    if (pool) {
       deployTitle.textContent = `Edit pool: ${pool.name}`;
       provisionForm.elements.pool_name.value = pool.name;
-      provisionForm.elements.pool_name.disabled = true;
       provisionForm.elements.vm_count.value = pool.count;
       provisionForm.elements.vm_duration_hours.value = pool.config.guac_link_ttl_seconds / 3600;
       dispenserInput.checked = !!pool.config.dispenser;
@@ -391,7 +389,7 @@ async function deletePool(pool) {
       ? ` Its ${pool.available} available VMs are not removed`
       : "";
    if (!confirm(`Delete saved config for pool "${pool.name}"?${suffix}`)) return;
-   const res = await fetch(`/api/admin/pools/${encodeURIComponent(pool.name)}`, { method: "DELETE" });
+   const res = await fetch(`/api/admin/pools/${encodeURIComponent(pool.code)}`, { method: "DELETE" });
    if (res.ok) loadPools();
 }
 
@@ -478,7 +476,7 @@ provisionForm.addEventListener("submit", async (e) => {
    body.private = privateInput.checked;
 
    if (editingPool) {
-      const res = await fetch(`/api/admin/pools/${encodeURIComponent(editingPool.name)}`, {
+      const res = await fetch(`/api/admin/pools/${encodeURIComponent(editingPool.code)}`, {
          method: "PUT",
          headers: { "Content-Type": "application/json" },
          body: JSON.stringify(body),

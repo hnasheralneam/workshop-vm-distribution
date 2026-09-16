@@ -114,6 +114,7 @@ function claimLabelFromPath() {
 }
 const claimLabel = claimLabelFromPath();
 const claimCode = new URLSearchParams(location.search).get("code");
+const onClaimPage = /^\/claim(\/|$)/.test(location.pathname);
 
 function renderButtons(pools) {
 	buttonsContainer.innerHTML = "";
@@ -121,7 +122,7 @@ function renderButtons(pools) {
 		const btn = document.createElement("button");
 		btn.className = "claim-btn";
 		btn.innerText = pool.text;
-		btn.onclick = () => handleTerminalAccess(pool.name, btn);
+		btn.onclick = () => handleTerminalAccess(pool, btn);
 		buttonsContainer.appendChild(btn);
 	}
 }
@@ -143,17 +144,17 @@ async function loadPoolButtons(attempt = 0) {
 		const data = await response.json();
 		applyTypes(data);
 		codeBtn.hidden = !(data.coded > 0);
-		const pools = (data.pools || []).filter((p) => !p.private && (p.dispenser || p.available > 0));
+		const pools = (data.pools || []).filter((p) => !p.private && p.code && (p.dispenser || p.available > 0));
 		if (pools.length > 1) {
-			renderButtons(pools.map((p) => ({ text: `Claim ${p.name}`, name: p.name })));
+			renderButtons(pools.map((p) => ({ text: `Claim ${p.name}`, name: p.name, code: p.code })));
 		} else if (pools.length === 1) {
-			renderButtons([{ text: "Claim", name: pools[0].name }]);
+			renderButtons([{ text: "Claim", name: pools[0].name, code: pools[0].code }]);
 		} else {
 			buttonsContainer.innerHTML = "";
 			setStatus("No VMs are available right now. Please contact your instructor.");
 		}
 	} catch (error) {
-		renderButtons([{ text: "Claim", name: null }]);
+		renderButtons([{ text: "Claim", name: null, code: claimCode }]);
 		codeBtn.hidden = false;
 		if (attempt < 2) {
 			setTimeout(() => loadPoolButtons(attempt + 1), 5000);
@@ -302,15 +303,15 @@ async function init() {
 	}
 	resumeTickets();
 
-	if (claimLabel) {
-		renderButtons([{ text: `Claim ${claimLabel}`, name: claimLabel }]);
+	if (onClaimPage && claimCode) {
+		renderButtons([{ text: claimLabel ? `Claim ${claimLabel}` : "Claim", name: claimLabel, code: claimCode }]);
 		if (vms.length) {
 			try {
 				const response = await fetch("/api/types");
 				applyTypes(await response.json());
 			} catch (error) {}
 		}
-		if (!loadTickets().length) handleTerminalAccess(claimLabel);
+		if (!loadTickets().length) claimByCode(claimCode);
 		return;
 	}
 
@@ -326,17 +327,18 @@ function resumeTickets() {
 	}
 }
 
-async function handleTerminalAccess(poolName, btn) {
+async function handleTerminalAccess(pool, btn) {
 	if (atCap()) {
-		openSwapModal(() => handleTerminalAccess(poolName, btn));
+		openSwapModal(() => handleTerminalAccess(pool, btn));
 		return;
 	}
 	setButtonsDisabled(true);
 	setStatus("Assigning your machine...");
 
 	try {
-		const claimBody = poolName ? { pool: poolName } : {};
-		if (claimCode) claimBody.code = claimCode;
+		const claimBody = {};
+		const code = pool && pool.code ? pool.code : claimCode;
+		if (code) claimBody.code = code;
 		const response = await fetch("/api/claim", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -345,20 +347,53 @@ async function handleTerminalAccess(poolName, btn) {
 		const data = await response.json();
 
 		if (data.status === "provisioning") {
-			provisionStart(data.ticket, poolName);
-			pollTicket(data.ticket, poolName, modalSink(data.ticket));
+			provisionStart(data.ticket, data.pool);
+			pollTicket(data.ticket, data.pool, modalSink(data.ticket));
 		} else if (response.ok) {
-			addVm(data.url, poolName, data.expires_at);
+			addVm(data.url, data.pool || (pool && pool.name), data.expires_at);
 			setStatus("VM claimed! Redirecting...", "success");
 			window.location.replace(data.url);
 		} else {
-			if (data.code_required) openCodeDialog();
-			else setStatus(data.detail || "Claim failed. Please try again.", "error");
+			setStatus(data.detail || "Claim failed. Please try again.", "error");
 			setButtonsDisabled(false);
 		}
 	} catch (error) {
 		setStatus("Network error. Please try again.", "error");
 		setButtonsDisabled(false);
+	}
+}
+
+async function claimByCode(code) {
+	if (atCap()) {
+		openSwapModal(() => claimByCode(code));
+		return;
+	}
+	if (polls.size) return;
+	setButtonsDisabled(true);
+	setStatus("Assigning your machine...");
+
+	try {
+		const response = await fetch("/api/redeem", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ code })
+		});
+		const data = await response.json();
+
+		if (response.ok && data.status === "ready") {
+			addVm(data.url, data.pool, data.expires_at);
+			setStatus("VM claimed! Redirecting...", "success");
+			window.location.replace(data.url);
+		} else if (response.ok && data.status === "provisioning") {
+			provisionStart(data.ticket, data.pool);
+			pollTicket(data.ticket, data.pool, modalSink(data.ticket));
+		} else {
+			setStatus(data.detail || "Claim failed. Please try again.", "error");
+			await loadPoolButtons();
+		}
+	} catch (error) {
+		setStatus("Network error. Please try again.", "error");
+		await loadPoolButtons();
 	}
 }
 
