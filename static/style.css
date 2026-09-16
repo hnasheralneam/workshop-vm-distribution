@@ -1113,6 +1113,18 @@ dialog button.secondary {
 
 @media (max-width: 700px) {
 	body.admin {
+		padding: 0.75rem;
+	}
+
+	body.portal {
+		padding: 1rem 0.75rem;
+	}
+
+	.card {
+		padding: 1rem;
+	}
+
+	dialog {
 		padding: 1rem;
 	}
 
