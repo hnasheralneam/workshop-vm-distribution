@@ -1,3 +1,7 @@
+* {
+	box-sizing: border-box;
+}
+
 :root {
 	color-scheme: dark light;
 
@@ -125,18 +129,6 @@ body.admin .subtitle {
 	text-align: center;
 }
 
-body.admin .grid {
-	display: grid;
-	grid-template-columns: 50% 50%;
-	gap: 1.5rem;
-	max-width: 1100px;
-	margin: auto;
-}
-
-@media (max-width: 900px) {
-	body.admin .grid { grid-template-columns: 1fr; }
-}
-
 body.admin .card h2 {
 	margin: 0 0 1rem;
 	font-size: 1.1rem;
@@ -201,6 +193,7 @@ body.admin .card-header {
 	align-items: center;
 	justify-content: space-between;
 	gap: 0.5rem;
+	flex-wrap: wrap;
 	margin-bottom: 1rem;
 }
 
@@ -469,8 +462,17 @@ dialog h2 {
 dialog .modal-actions {
 	display: flex;
 	justify-content: center;
+	flex-wrap: wrap;
 	gap: 0.5rem;
 	margin-top: 1rem;
+}
+
+body.admin .table-wrap {
+	overflow-x: auto;
+}
+
+body.admin .vm-checkbox {
+	width: auto;
 }
 
 body.admin table {
@@ -562,6 +564,8 @@ body.admin .hint {
 
 body.portal {
 	min-height: 100vh;
+	min-height: 100svh;
+	padding: 1.5rem 1rem;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -570,7 +574,7 @@ body.portal {
 body.portal .portal-container {
 	width: 100%;
 	max-width: 420px;
-	margin: 1.5rem;
+	margin: auto;
 	box-shadow: 0 10px 30px var(--shadow);
 	text-align: center;
 }
@@ -778,7 +782,7 @@ dialog button.secondary {
 
 #redeploy-rows {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 0.75rem;
 }
 
@@ -1104,5 +1108,57 @@ dialog button.secondary {
 	.dots i {
 		animation: none;
 		opacity: 1;
+	}
+}
+
+@media (max-width: 700px) {
+	body.admin {
+		padding: 1rem;
+	}
+
+	#redeploy-rows {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	body.admin table {
+		min-width: 640px;
+	}
+
+	[data-tip]::before,
+	[data-tip]::after {
+		display: none;
+	}
+}
+
+@media (max-width: 480px) {
+	body.portal .vm-row,
+	#swap-options .swap-row {
+		flex-wrap: wrap;
+	}
+
+	body.portal .vm-row .vm-label,
+	#swap-options .vm-label {
+		flex: 1 1 100%;
+		white-space: normal;
+	}
+
+	body.portal .vm-actions {
+		margin-left: auto;
+	}
+
+	body.portal .vm-actions button,
+	#swap-options .swap-row button {
+		padding: 0.55rem 0.9rem;
+	}
+
+	body.portal #code-btn {
+		width: 100%;
+	}
+
+	body.admin th:nth-child(2),
+	body.admin td:nth-child(2),
+	body.admin th:nth-child(3),
+	body.admin td:nth-child(3) {
+		display: none;
 	}
 }
