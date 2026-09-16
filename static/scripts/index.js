@@ -32,18 +32,11 @@ let celebrating = false;
 let vms = loadVms();
 
 function loadVms() {
-	const raw = localStorage.getItem("assigned_vm_urls");
-	if (raw) {
-		try {
-			const parsed = JSON.parse(raw);
-			if (Array.isArray(parsed)) return parsed;
-		} catch (error) {}
-	}
-	const legacy = localStorage.getItem("assigned_vm_url");
-	localStorage.removeItem("assigned_vm_url");
-	const migrated = legacy ? [{ url: legacy, pool: null }] : [];
-	if (migrated.length) localStorage.setItem("assigned_vm_urls", JSON.stringify(migrated));
-	return migrated;
+	try {
+		const parsed = JSON.parse(localStorage.getItem("assigned_vm_urls"));
+		if (Array.isArray(parsed)) return parsed;
+	} catch (error) {}
+	return [];
 }
 
 function saveVms() {
