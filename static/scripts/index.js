@@ -304,8 +304,13 @@ async function init() {
 
 	if (claimLabel) {
 		renderButtons([{ text: `Claim ${claimLabel}`, name: claimLabel }]);
-		fetch("/api/types").then((r) => r.json()).then(applyTypes).catch(() => {});
-		if (vms.length === 0) handleTerminalAccess(claimLabel);
+		if (vms.length) {
+			try {
+				const response = await fetch("/api/types");
+				applyTypes(await response.json());
+			} catch (error) {}
+		}
+		if (!loadTickets().length) handleTerminalAccess(claimLabel);
 		return;
 	}
 
@@ -345,7 +350,7 @@ async function handleTerminalAccess(poolName, btn) {
 		} else if (response.ok) {
 			addVm(data.url, poolName, data.expires_at);
 			setStatus("VM claimed! Redirecting...", "success");
-			window.location.href = data.url;
+			window.location.replace(data.url);
 		} else {
 			if (data.code_required) openCodeDialog();
 			else setStatus(data.detail || "Claim failed. Please try again.", "error");
@@ -457,14 +462,14 @@ function provisionReady(ticket, data, pool) {
 	modalTickets.delete(ticket);
 	addVm(data.url, data.pool || pool, data.expires_at);
 	if (!provisionDialog.open || celebrating) {
-		window.location.href = data.url;
+		window.location.replace(data.url);
 		return;
 	}
 	celebrating = true;
 	provisionLines.innerHTML = "";
 	orbitSet("done");
 	setStageLabel(provisionLabel, "VM ready! Opening...");
-	setTimeout(() => { window.location.href = data.url; }, 1200);
+	setTimeout(() => { window.location.replace(data.url); }, 1200);
 }
 
 function provisionFail(ticket, detail) {
@@ -501,7 +506,7 @@ const backgroundSink = {
 	ready: (data, pool) => {
 		addVm(data.url, data.pool || pool, data.expires_at);
 		setStatus("VM ready! Redirecting...", "success");
-		window.location.href = data.url;
+		window.location.replace(data.url);
 	},
 	fail: (detail) => {
 		setStatus(detail, "error");
