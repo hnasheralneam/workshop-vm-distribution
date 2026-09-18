@@ -43,8 +43,8 @@ function saveVms() {
 	localStorage.setItem("assigned_vm_urls", JSON.stringify(vms));
 }
 
-function addVm(url, pool, expiresAt) {
-	vms.push({ url, pool: pool || null, expires_at: expiresAt ?? null });
+function addVm(url, pool, expiresAt, uid) {
+	vms.push({ url, pool: pool || null, uid: uid || null, expires_at: expiresAt ?? null });
 	saveVms();
 	renderVms();
 }
@@ -205,18 +205,19 @@ async function validateVm(vm) {
 		const response = await fetch("/api/validate", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ url: vm.url })
+			body: JSON.stringify({ url: vm.url, uid: vm.uid })
 		});
 		const data = await response.json();
 		if (data.valid) {
-			if (data.expires_at) {
-				vm.expires_at = data.expires_at;
-				saveVms();
-			}
+			if (data.uid) vm.uid = data.uid;
+			if (data.url) vm.url = data.url;
+			if (data.expires_at) vm.expires_at = data.expires_at;
+			if (data.uid || data.url || data.expires_at) saveVms();
 			return;
 		}
 		if (data.url) {
 			vm.url = data.url;
+			vm.uid = data.uid || null;
 			vm.expires_at = data.expires_at ?? null;
 			saveVms();
 			setStatus("An expired machine was replaced with a new one.");
@@ -234,11 +235,12 @@ async function reconnectVm(vm, row) {
 		const response = await fetch("/api/reconnect", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ url: vm.url })
+			body: JSON.stringify({ url: vm.url, uid: vm.uid })
 		});
 		const data = await response.json();
 		if (response.ok && data.url) {
 			vm.url = data.url;
+			if (data.uid) vm.uid = data.uid;
 			if (data.expires_at) vm.expires_at = data.expires_at;
 			saveVms();
 			setStatus("Redirecting...");
@@ -268,7 +270,7 @@ async function releaseVm(vm, row) {
 		const response = await fetch("/api/release", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ url: vm.url })
+			body: JSON.stringify({ url: vm.url, uid: vm.uid })
 		});
 		if (response.ok || response.status === 404) {
 			removeVm(vm);
@@ -343,7 +345,7 @@ async function handleTerminalAccess(pool, btn) {
 			provisionStart(data.ticket, data.pool);
 			pollTicket(data.ticket, data.pool, modalSink(data.ticket));
 		} else if (response.ok) {
-			addVm(data.url, data.pool || (pool && pool.name), data.expires_at);
+			addVm(data.url, data.pool || (pool && pool.name), data.expires_at, data.uid);
 			setStatus("VM claimed! Redirecting...", "success");
 			window.location.replace(data.url);
 		} else {
@@ -374,7 +376,7 @@ async function claimByCode(code) {
 		const data = await response.json();
 
 		if (response.ok && data.status === "ready") {
-			addVm(data.url, data.pool, data.expires_at);
+			addVm(data.url, data.pool, data.expires_at, data.uid);
 			setStatus("VM claimed! Redirecting...", "success");
 			window.location.replace(data.url);
 		} else if (response.ok && data.status === "provisioning") {
@@ -488,7 +490,7 @@ function provisionStage(ticket, stage) {
 
 function provisionReady(ticket, data, pool) {
 	modalTickets.delete(ticket);
-	addVm(data.url, data.pool || pool, data.expires_at);
+	addVm(data.url, data.pool || pool, data.expires_at, data.uid);
 	if (!provisionDialog.open || celebrating) {
 		window.location.replace(data.url);
 		return;
@@ -532,7 +534,7 @@ function modalSink(ticket) {
 const backgroundSink = {
 	stage: (stage) => setStatus(stageText(stage)),
 	ready: (data, pool) => {
-		addVm(data.url, data.pool || pool, data.expires_at);
+		addVm(data.url, data.pool || pool, data.expires_at, data.uid);
 		setStatus("VM ready! Redirecting...", "success");
 		window.location.replace(data.url);
 	},
@@ -619,7 +621,7 @@ async function redeemCode() {
 		});
 		const data = await response.json();
 		if (response.ok && data.status === "ready") {
-			addVm(data.url, data.pool, data.expires_at);
+			addVm(data.url, data.pool, data.expires_at, data.uid);
 			window.location.href = data.url;
 		} else if (response.ok && data.status === "provisioning") {
 			codeDialog.close();
@@ -670,7 +672,7 @@ async function swapRelease(vm, btn) {
 		const response = await fetch("/api/release", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ url: vm.url })
+			body: JSON.stringify({ url: vm.url, uid: vm.uid })
 		});
 		if (!response.ok && response.status !== 404) {
 			const data = await response.json();

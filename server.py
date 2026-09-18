@@ -58,6 +58,16 @@ def entry_ref(entry):
     return entry.get("pool_code") or entry.get("pool")
 
 
+def identity_match(entry, uid, url):
+    if uid:
+        return entry.get("uid") == uid
+    return bool(url) and url in (entry.get("url"), entry.get("prev_url"))
+
+
+def find_entry(entries, uid, url):
+    return next((e for e in entries if identity_match(e, uid, url)), None)
+
+
 def load_configs():
     if not CONFIGS_FILE.exists():
         return {}
@@ -113,6 +123,9 @@ def finalize_reservation(entries, vmid, url, state):
             del entry["reserved"]
             entry["claimed"] = True
             entry["url"] = url
+            if "uid" not in entry:
+                entry["uid"] = uuid.uuid4().hex
+            state["uid"] = entry["uid"]
             state["done"] = True
     return entries
 
@@ -299,7 +312,7 @@ def claim():
         return jsonify(detail="VM is not reachable right now. Please contact your instructor."), 502
 
     poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
-    return jsonify(url=url, expires_at=final_entry.get("expires_at"))
+    return jsonify(url=url, expires_at=final_entry.get("expires_at"), uid=state.get("uid"))
 
 
 def claim_from_pool(config):
@@ -326,7 +339,7 @@ def claim_from_pool(config):
         if url is None:
             return jsonify(detail="VM is not reachable right now. Please try again."), 502
         poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
-        return jsonify(status="ready", url=url, pool=pool_name, expires_at=final_entry.get("expires_at"))
+        return jsonify(status="ready", url=url, pool=pool_name, expires_at=final_entry.get("expires_at"), uid=state.get("uid"))
 
     if not config.get("dispenser"):
         return jsonify(detail=f"No VMs available in pool {pool_name!r} right now."), 404
@@ -341,20 +354,33 @@ def claim_from_pool(config):
 @limiter.limit("30/minute")
 def validate():
     body = request.get_json(silent=True) or {}
+    uid = body.get("uid")
     url = body.get("url", "")
     entries = poolstore.load(POOL_FILE)
-    entry = next((e for e in entries if e.get("url") == url), None)
+    entry = find_entry(entries, uid, url)
     if entry is None:
         return jsonify(valid=False)
     if not entry.get("claimed"):
         return jsonify(valid=False, expired=is_expired(entry))
     if not is_expired(entry):
-        return jsonify(valid=True, expires_at=entry.get("expires_at"))
+        try:
+            fresh = provision.mint_session_url(entry, entry_ttl(entry))
+        except provision.VMNotFoundError:
+            applog.log.info(
+                f"Validate: VM {entry['vmid']} not found on Proxmox "
+                f"(removed externally); pruned from pool.json"
+            )
+            poolstore.update(POOL_FILE, lambda es: remove_dead_entry(es, entry["vmid"]))
+            return jsonify(valid=False)
+        except Exception as exc:
+            applog.log.info(f"Validate: mint failed for VM {entry['vmid']}: {exc}")
+            return jsonify(valid=True, uid=entry.get("uid"), expires_at=entry.get("expires_at"))
+        return jsonify(valid=True, url=fresh, uid=entry.get("uid"), expires_at=entry.get("expires_at"))
 
     state = {}
 
     def replace_expired(current):
-        expired = next((e for e in current if e.get("url") == url and e.get("claimed")), None)
+        expired = next((e for e in current if identity_match(e, uid, url) and e.get("claimed")), None)
         if expired is None:
             state["gone"] = True
             return current
@@ -386,7 +412,7 @@ def validate():
     poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], fresh, state))
     if not state.get("done"):
         return jsonify(valid=False, expired=True)
-    return jsonify(valid=False, expired=True, url=fresh, expires_at=final_entry.get("expires_at"))
+    return jsonify(valid=False, expired=True, url=fresh, expires_at=final_entry.get("expires_at"), uid=final_entry.get("uid"))
 
 
 @app.route("/api/reconnect", methods=["POST"])
@@ -394,8 +420,9 @@ def validate():
 def reconnect():
     """Stored ?token= URLs idle out (~60min), so re-mint a fresh session with the VM's current IP."""
     body = request.get_json(silent=True) or {}
+    uid = body.get("uid")
     url = body.get("url", "")
-    entry = next((e for e in poolstore.load(POOL_FILE) if e.get("url") == url), None)
+    entry = find_entry(poolstore.load(POOL_FILE), uid, url)
     if entry is None:
         return jsonify(valid=False), 404
     if not entry.get("claimed"):
@@ -421,7 +448,8 @@ def reconnect():
 
     def finalize(entries):
         for e in entries:
-            if e.get("url") == url and e.get("claimed"):
+            if identity_match(e, uid, url) and e.get("claimed"):
+                e["prev_url"] = e.get("url")
                 e["url"] = fresh
                 state["done"] = True
         return entries
@@ -429,19 +457,20 @@ def reconnect():
     poolstore.update(POOL_FILE, finalize)
     if not state.get("done"):
         return jsonify(valid=False), 404
-    return jsonify(valid=True, url=fresh, expires_at=entry.get("expires_at"))
+    return jsonify(valid=True, url=fresh, uid=entry.get("uid"), expires_at=entry.get("expires_at"))
 
 
 @app.route("/api/release", methods=["POST"])
 @limiter.limit("10/minute")
 def release():
     body = request.get_json(silent=True) or {}
+    uid = body.get("uid")
     url = body.get("url", "")
     state = {}
 
     def mark_released(entries):
         for entry in entries:
-            if entry.get("url") == url and entry.get("claimed"):
+            if identity_match(entry, uid, url) and entry.get("claimed"):
                 entry["expires_at"] = time.time()
                 state["entry"] = entry
         return entries
@@ -510,6 +539,7 @@ def run_redeem_provision(ticket, config):
         entry = {
             "vmid": vmid,
             "student_id": student_id,
+            "uid": uuid.uuid4().hex,
             "url": url,
             "claimed": True,
             "expires_at": expires_at,
@@ -520,7 +550,7 @@ def run_redeem_provision(ticket, config):
             "created_at": time.time(),
         }
         provision.append_pool_entries(config["url_output_file"], [entry])
-        set_ticket(ticket, status="ready", url=url, expires_at=expires_at)
+        set_ticket(ticket, status="ready", url=url, expires_at=expires_at, uid=entry["uid"])
     except Exception as exc:
         applog.log.info(f"Redeem provisioning failed: {exc}")
         if vmid is not None:
@@ -900,9 +930,16 @@ def migrate_pool_entries(entries, configs):
     return entries
 
 
+def ensure_uids(entries):
+    for entry in entries:
+        if "uid" not in entry:
+            entry["uid"] = uuid.uuid4().hex
+    return entries
+
+
 def startup():
     configs = poolstore.update(CONFIGS_FILE, normalize_configs, dict)
-    poolstore.update(POOL_FILE, lambda entries: migrate_pool_entries([{k: v for k, v in e.items() if k != "reserved"} for e in entries], configs))
+    poolstore.update(POOL_FILE, lambda entries: ensure_uids(migrate_pool_entries([{k: v for k, v in e.items() if k != "reserved"} for e in entries], configs)))
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()
