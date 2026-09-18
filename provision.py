@@ -54,6 +54,8 @@ def _looks_like_missing_vm(exc):
 
 VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
+RECONNECT_IP_TIMEOUT = 30
+
 
 def default_config():
     url_output_file = os.getenv("URL_OUTPUT_FILE", "pool.json")
@@ -113,9 +115,6 @@ def build_config(overrides=None):
 
 
 def require_template_fields(config):
-    """Raise ValueError naming any missing template field. Call this before
-    provisioning a VM (config comes from admin-submitted overrides with no
-    env fallback); not needed for destroy/mint-only call sites."""
     missing = sorted(f for f in TEMPLATE_FIELDS if not config.get(f) and config.get(f) != 0)
     if missing:
         raise ValueError(f"Missing required field(s): {', '.join(missing)}")
@@ -345,7 +344,7 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
         tasks.append((target_vmid, student_ids[i]))
         log(f"Allocated {target_vmid} to {student_ids[i]}")
 
-    log(f"\n--- Firing off Proxmox Clones in Parallel ---")
+    log("\n--- Firing off Proxmox Clones in Parallel ---")
     results = []
 
     # keep max_workers low or parallel clones hammer the Proxmox API
@@ -400,14 +399,9 @@ if __name__ == "__main__":
     applog.log.info(f"=== Creating {cli_config['vm_count']} workshop VMs ===")
     run_parallel_provisioning(cli_config)
 
-RECONNECT_IP_TIMEOUT = 30
-
 
 def mint_session_url(entry, guac_link_ttl_seconds, log=applog.log.info):
-    """Mint a fresh session URL for an existing entry, using its current IP,
-    its stored access credentials, and its pool's configured link TTL.
-    vm_count is irrelevant here (no VM is being provisioned) so a placeholder
-    is passed just to satisfy build_config's int coercion."""
+    """vm_count is a placeholder; build_config coerces it to int regardless."""
     config = build_config({
         "template_vm_access_method": entry.get("access_method"),
         "template_vm_username": entry.get("template_vm_username"),

@@ -165,6 +165,11 @@ def mint_or_prune(entry, ttl, pool_predicate, log_prefix):
     return None, None
 
 
+def prune_removed(prefix, entry):
+    applog.log.info(f"{prefix}: VM {entry['vmid']} not found on Proxmox (removed externally); pruned from pool.json")
+    poolstore.update(POOL_FILE, lambda es: remove_dead_entry(es, entry["vmid"]))
+
+
 GHOST_SWEEP_GRACE_SECONDS = 120
 
 
@@ -174,7 +179,6 @@ def proxmox_target_for_pool(ref):
 
 
 def sweep_ghost_vms():
-    """Prunes pool.json entries whose VM was removed from Proxmox externally."""
     configs = load_configs()
     entries = poolstore.load(POOL_FILE)
     eligible = [e for e in entries if entry_ref(e) in configs and time.time() - e.get("created_at", 0) >= GHOST_SWEEP_GRACE_SECONDS]
@@ -206,7 +210,7 @@ def sweep_ghost_vms():
 
 
 def reap_expired_vms():
-    """Destroys expired VMs; run_teardown also prunes them from pool.json."""
+    """run_teardown also prunes the VMs it destroys from pool.json."""
     while True:
         time.sleep(REAP_INTERVAL_SECONDS)
         try:
@@ -366,11 +370,7 @@ def validate():
         try:
             fresh = provision.mint_session_url(entry, entry_ttl(entry))
         except provision.VMNotFoundError:
-            applog.log.info(
-                f"Validate: VM {entry['vmid']} not found on Proxmox "
-                f"(removed externally); pruned from pool.json"
-            )
-            poolstore.update(POOL_FILE, lambda es: remove_dead_entry(es, entry["vmid"]))
+            prune_removed("Validate", entry)
             return jsonify(valid=False)
         except Exception as exc:
             applog.log.info(f"Validate: mint failed for VM {entry['vmid']}: {exc}")
@@ -434,11 +434,7 @@ def reconnect():
     try:
         fresh = provision.mint_session_url(entry, entry_ttl(entry))
     except provision.VMNotFoundError:
-        applog.log.info(
-            f"Reconnect: VM {entry['vmid']} not found on Proxmox "
-            f"(removed externally); pruned from pool.json"
-        )
-        poolstore.update(POOL_FILE, lambda es: remove_dead_entry(es, entry["vmid"]))
+        prune_removed("Reconnect", entry)
         return jsonify(valid=False, expired=True)
     except Exception as exc:
         applog.log.info(f"Reconnect: mint failed for VM {entry['vmid']}: {exc}")
@@ -605,7 +601,7 @@ def job_log_appender(job):
 
 
 def start_job(kind, target, *target_args):
-    """Runs target(*target_args, log=...) in a background thread. One job per kind."""
+    """One job per kind."""
     with job_lock:
         job = jobs[kind]
         if job is not None and job["status"] == "running":
@@ -948,5 +944,4 @@ def startup():
 startup()
 
 if __name__ == "__main__":
-    # gunicorn -w 1 --threads "$(( $(nproc) > 2 ? $(nproc) - 1 : $(nproc) ))" -b 0.0.0.0:5000 server:app
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))

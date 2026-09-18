@@ -39,6 +39,48 @@ const ICONS = {
    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
 };
 
+function formatTimeAmount(timeMs, units = "yMwdhms", decimalPrecision) {
+   let seconds = timeMs / 1000;
+   let minutes = seconds / 60;
+   let hours = minutes / 60;
+   let days = hours / 24;
+   let weeks = days / 7;
+   let months = weeks / 4.34524;  // Average number of weeks per month
+   let years = months / 12;
+
+   let result = "";
+
+   if (years >= 1 && units.includes("y")) {
+      result += Math.floor(years) + " year" + (Math.floor(years) !== 1 ? "s " : " ");
+   }
+   months %= 12;
+   if (months >= 1 && units.includes("M")) {
+      result += Math.floor(months) + " month" + (Math.floor(months) !== 1 ? "s " : " ");
+   }
+   weeks %= 4.34524;
+   if (weeks >= 1 && units.includes("w")) {
+      result += Math.floor(weeks) + " week" + (Math.floor(weeks) !== 1 ? "s " : " ");
+   }
+   days %= 7;
+   if (days >= 1 && units.includes("d")) {
+      result += Math.floor(days) + " day" + (Math.floor(days) !== 1 ? "s " : " ");
+   }
+   hours %= 24;
+   if (hours >= 1 && units.includes("h")) {
+      result += Math.floor(hours) + " hour" + (Math.floor(hours) !== 1 ? "s " : " ");
+   }
+   minutes %= 60;
+   if (minutes >= 1 && units.includes("m")) {
+      result += Math.floor(minutes) + " minute" + (Math.floor(minutes) !== 1 ? "s and " : " and ");
+   }
+   seconds = timeMs % 60000 / 1000;
+   if (units.includes("s")) {
+      result += seconds.toFixed(decimalPrecision || 0) + " second" + (seconds !== 1 ? "s" : "");
+   }
+
+   return result;
+}
+
 async function loadPool() {
    const res = await fetch("/api/admin/pool");
    if (!res.ok) return;
