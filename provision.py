@@ -220,7 +220,7 @@ def get_vm_ip(proxmox, config, vmid, timeout=120):
 
 
 def wait_for_port(ip, port):
-    deadline = time.time() + 120
+    deadline = time.time() + 300
     while time.time() < deadline:
         try:
             with socket.create_connection((ip, port), timeout=2):
@@ -232,7 +232,19 @@ def wait_for_port(ip, port):
             return True
         except (ConnectionRefusedError, socket.timeout, OSError):
             time.sleep(3)
-    raise TimeoutError(f"Port {port} on {ip} did not open within 120 seconds")
+    raise TimeoutError(f"Port {port} on {ip} did not open within 300 seconds")
+
+
+def wait_for_task(node, upid, timeout=900):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = node.tasks(upid).status.get()
+        if status.get("status") != "running":
+            if status.get("exitstatus") != "OK":
+                raise RuntimeError(f"Task {upid} failed: {status.get('exitstatus')}")
+            return
+        time.sleep(5)
+    raise TimeoutError(f"Task {upid} did not finish within {timeout} seconds")
 
 
 def ensure_not_template(node, vmid):
@@ -243,10 +255,12 @@ def ensure_not_template(node, vmid):
 def provision_worker(proxmox, config, vmid, student_id, log):
     node = proxmox.nodes(config["proxmox_node"])
     access_method = config["template_vm_access_method"]
+    upid = None
 
     try:
         log(f"[{vmid}] Cloning template...")
-        node.qemu(config["template_vm_id"]).clone.post(newid=vmid, name=f"workshop-{student_id}", full=0)
+        upid = node.qemu(config["template_vm_id"]).clone.post(newid=vmid, name=f"workshop-{student_id}", full=0)
+        wait_for_task(node, upid)
 
         log(f"[{vmid}] Booting VM...")
         node.qemu(vmid).status.start.post()
@@ -261,17 +275,16 @@ def provision_worker(proxmox, config, vmid, student_id, log):
         return vmid, student_id, guac_url, expires_at
     except Exception as exc:
         log(f"[{vmid}] Provision failed: {exc}. Cleaning up VM...")
+        if upid:
+            try:
+                wait_for_task(node, upid)
+            except Exception:
+                pass
         try:
-            status = node.qemu(vmid).status.current.get()
-            if status.get("status") == "running":
-                node.qemu(vmid).status.stop.post()
-        except Exception:
-            pass
-        try:
-            ensure_not_template(node, vmid)
-            node.qemu(vmid).delete()
-        except Exception:
-            pass
+            from destroy import destroy_worker
+            destroy_worker(proxmox, config["proxmox_node"], vmid, f"workshop-{student_id}", log)
+        except Exception as cleanup_exc:
+            log(f"[{vmid}] ⚠️ Cleanup failed, VM may be orphaned: {cleanup_exc}")
         raise
 
 
