@@ -190,7 +190,7 @@ module_env
 module_systemd
 
 log "Deployment complete."
-log "  Guacamole :5000 portal (students) + :8080 guac gui (guacamole/guacamole)"
+log "  Portal on :${PORT:-5000} (students) + :8080 guac gui (guacamole/guacamole)"
 log "  .env: $APP_DIR/workshop-vm-distribution/.env"
 echo "GUAC_JSON_KEY_HINT=$GUAC_JSON_KEY"
 if [[ -n "${ADMIN_PASSWORD_GENERATED:-}" ]]; then
