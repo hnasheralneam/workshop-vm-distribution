@@ -1,6 +1,8 @@
 # Workshop VM Distribution
 
 Provisions per-student workshop VMs on Proxmox and hands them out through a web portal, using Guacamole for browser-based access.
+Great for students to follow along with a hands-on box during a workshop, or to give take-home practice vms with another tool like DawgSec's huitzilopochtli.
+
 
 ## Requirements
 - Python 3

@@ -790,6 +790,11 @@ dialog button.secondary {
 	padding-top: 1rem;
 }
 
+#provision-dialog:focus,
+#provision-dialog:focus-visible {
+	outline: none;
+}
+
 #provision-label {
 	color: var(--text-muted);
 	font-size: 0.9rem;
@@ -892,13 +897,11 @@ dialog button.secondary {
 
 .orbit .spinner-orbit {
 	transform-origin: 105px 105px;
-	animation: orbitspin 1.6s linear infinite;
 	transition: opacity 0.4s;
 }
 
 .orbit.s-done .spinner-orbit,
 .orbit.s-error .spinner-orbit {
-	animation: none;
 	opacity: 0;
 }
 
@@ -1054,18 +1057,16 @@ dialog button.secondary {
 	animation: checkburst 0.85s ease-out forwards 0.2s;
 }
 
-@keyframes orbitspin {
-	to { transform: rotate(360deg); }
-}
-
 @keyframes halo {
-	0% { opacity: 0.55; r: 13; }
-	100% { opacity: 0; r: 23; }
+	0% { opacity: 0; r: 8; }
+	20% { opacity: 0.6; }
+	100% { opacity: 0; r: 30; }
 }
 
 @keyframes haloblip {
-	0% { opacity: 0.45; r: 13; }
-	100% { opacity: 0; r: 21; }
+	0% { opacity: 0; r: 8; }
+	20% { opacity: 0.5; }
+	100% { opacity: 0; r: 26; }
 }
 
 @keyframes cube3d {
@@ -1098,7 +1099,6 @@ dialog button.secondary {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.orbit .spinner-orbit,
 	.orbit .cube-wrap,
 	.orbit .cube3d,
 	.orbit .ico.now .halo {

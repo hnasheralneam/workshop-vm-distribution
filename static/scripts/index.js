@@ -403,6 +403,39 @@ function stageText(stage) {
 const STAGES = ["cloning", "booting", "network", "adding"];
 const orbitArcs = provisionOrbit.querySelectorAll(".arc");
 const orbitIcons = provisionOrbit.querySelectorAll(".ico");
+const orbitSpinner = provisionOrbit.querySelector(".spinner-orbit");
+const ORBIT_SLOW = 70;
+const ORBIT_FAST = 320;
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+let orbitAngle = 0;
+let orbitSpeed = ORBIT_SLOW;
+let orbitLast = 0;
+let orbitRunning = false;
+
+// Comet crawls over unlit track and sprints over lit arcs. Each arc owns the
+// quadrant centred on its icon, so the comet at rotation 0 (top) sits on arc 0.
+function orbitFrame(now) {
+	const done = provisionOrbit.classList.contains("s-done") || provisionOrbit.classList.contains("s-error");
+	if (!provisionDialog.open || done || reducedMotion.matches) {
+		orbitRunning = false;
+		return;
+	}
+	const dt = Math.min((now - orbitLast) / 1000, 0.05);
+	orbitLast = now;
+	const quadrant = Math.floor((((orbitAngle + 45) % 360) + 360) % 360 / 90);
+	const target = orbitArcs[quadrant].classList.contains("lit") ? ORBIT_FAST : ORBIT_SLOW;
+	orbitSpeed += (target - orbitSpeed) * (1 - Math.exp(-dt / 0.12));
+	orbitAngle = (orbitAngle + orbitSpeed * dt) % 360;
+	orbitSpinner.style.transform = `rotate(${orbitAngle}deg)`;
+	requestAnimationFrame(orbitFrame);
+}
+
+function orbitKick() {
+	if (orbitRunning) return;
+	orbitRunning = true;
+	orbitLast = performance.now();
+	requestAnimationFrame(orbitFrame);
+}
 
 function orbitSet(stage) {
 	provisionOrbit.classList.remove("s-done", "s-error");
@@ -425,6 +458,7 @@ function orbitSet(stage) {
 		orbitIcons[i].classList.add("done");
 	}
 	if (upto >= 0) orbitIcons[upto].classList.add("now");
+	orbitKick();
 }
 
 function setStageLabel(el, text) {
