@@ -27,6 +27,10 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
         ensure_not_template(node, vmid)
         current_status = node.qemu(vmid).status.current.get()
 
+        identity = current_status.get("name")
+        if identity != vm_name:
+            raise RuntimeError(f"VM {vmid} is now {identity!r}, aborting destroy")
+
         # Proxmox won't delete a running VM
         if current_status.get("status") == "running":
             log(f"[{vmid}] 🛑 Stopping {vm_name}...")
