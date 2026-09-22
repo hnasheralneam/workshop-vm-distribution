@@ -117,15 +117,17 @@ def remove_dead_entry(entries, vmid):
     return [e for e in entries if e["vmid"] != vmid]
 
 
-def finalize_reservation(entries, vmid, url, state):
+def finalize_reservation(entries, vmid, url, state, ttl):
     for entry in entries:
         if entry["vmid"] == vmid and entry.get("reserved"):
             del entry["reserved"]
             entry["claimed"] = True
             entry["url"] = url
+            entry["expires_at"] = time.time() + ttl
             if "uid" not in entry:
                 entry["uid"] = uuid.uuid4().hex
             state["uid"] = entry["uid"]
+            state["expires_at"] = entry["expires_at"]
             state["done"] = True
     return entries
 
@@ -315,8 +317,8 @@ def claim():
     if url is None:
         return jsonify(detail="VM is not reachable right now. Please contact your instructor."), 502
 
-    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
-    return jsonify(url=url, expires_at=final_entry.get("expires_at"), uid=state.get("uid"))
+    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
+    return jsonify(url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
 
 
 def claim_from_pool(config):
@@ -342,8 +344,8 @@ def claim_from_pool(config):
         url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
         if url is None:
             return jsonify(detail="VM is not reachable right now. Please try again."), 502
-        poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state))
-        return jsonify(status="ready", url=url, pool=pool_name, expires_at=final_entry.get("expires_at"), uid=state.get("uid"))
+        poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
+        return jsonify(status="ready", url=url, pool=pool_name, expires_at=state.get("expires_at"), uid=state.get("uid"))
 
     if not config.get("dispenser"):
         return jsonify(detail=f"No VMs available in pool {pool_name!r} right now."), 404
@@ -409,10 +411,10 @@ def validate():
     if fresh is None:
         return jsonify(valid=False, expired=True, detail="Could not prepare a replacement machine. Please try again.")
 
-    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], fresh, state))
+    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], fresh, state, entry_ttl(final_entry)))
     if not state.get("done"):
         return jsonify(valid=False, expired=True)
-    return jsonify(valid=False, expired=True, url=fresh, expires_at=final_entry.get("expires_at"), uid=final_entry.get("uid"))
+    return jsonify(valid=False, expired=True, url=fresh, expires_at=state.get("expires_at"), uid=state.get("uid"))
 
 
 @app.route("/api/reconnect", methods=["POST"])
