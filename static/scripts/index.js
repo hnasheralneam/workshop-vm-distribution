@@ -39,20 +39,47 @@ function loadVms() {
 	return [];
 }
 
-function saveVms() {
-	localStorage.setItem("assigned_vm_urls", JSON.stringify(vms));
+function sameVm(entry, vm) {
+	if (vm.uid && entry.uid) return entry.uid === vm.uid;
+	return entry.url === vm.url;
+}
+
+function writeVms(stored) {
+	localStorage.setItem("assigned_vm_urls", JSON.stringify(stored));
 }
 
 function addVm(url, pool, expiresAt, uid) {
-	vms.push({ url, pool: pool || null, uid: uid || null, expires_at: expiresAt ?? null });
-	saveVms();
+	const stored = loadVms();
+	const entry = { url, pool: pool || null, uid: uid || null, expires_at: expiresAt ?? null };
+	const existing = stored.find((e) => sameVm(e, entry));
+	if (existing) Object.assign(existing, entry);
+	else stored.push(entry);
+	writeVms(stored);
+	vms = stored;
 	renderVms();
 }
 
 function removeVm(vm) {
-	const index = vms.indexOf(vm);
-	if (index !== -1) vms.splice(index, 1);
-	saveVms();
+	const stored = loadVms().filter((e) => !sameVm(e, vm));
+	writeVms(stored);
+	vms = stored;
+}
+
+function updateVm(vm, fields) {
+	const patch = {};
+	for (const [key, value] of Object.entries(fields)) if (value !== undefined) patch[key] = value;
+	if (!Object.keys(patch).length) return;
+	const stored = loadVms();
+	const entry = stored.find((e) => sameVm(e, vm));
+	if (!entry) return;
+	Object.assign(entry, patch);
+	writeVms(stored);
+	Object.assign(vm, patch);
+}
+
+function refreshVms() {
+	vms = loadVms();
+	renderVms();
 }
 
 function atCap() {
@@ -209,17 +236,11 @@ async function validateVm(vm) {
 		});
 		const data = await response.json();
 		if (data.valid) {
-			if (data.uid) vm.uid = data.uid;
-			if (data.url) vm.url = data.url;
-			if (data.expires_at) vm.expires_at = data.expires_at;
-			if (data.uid || data.url || data.expires_at) saveVms();
+			updateVm(vm, { uid: data.uid, url: data.url, expires_at: data.expires_at ?? undefined });
 			return;
 		}
 		if (data.url) {
-			vm.url = data.url;
-			vm.uid = data.uid || null;
-			vm.expires_at = data.expires_at ?? null;
-			saveVms();
+			updateVm(vm, { url: data.url, uid: data.uid || null, expires_at: data.expires_at ?? null });
 			setStatus("An expired machine was replaced with a new one.");
 		} else {
 			removeVm(vm);
@@ -230,6 +251,7 @@ async function validateVm(vm) {
 
 async function reconnectVm(vm, row) {
 	setRowDisabled(row, true);
+	setButtonsDisabled(true);
 	setStatus("Reconnecting...");
 	try {
 		const response = await fetch("/api/reconnect", {
@@ -239,24 +261,24 @@ async function reconnectVm(vm, row) {
 		});
 		const data = await response.json();
 		if (response.ok && data.url) {
-			vm.url = data.url;
-			if (data.uid) vm.uid = data.uid;
-			if (data.expires_at) vm.expires_at = data.expires_at;
-			saveVms();
+			updateVm(vm, { url: data.url, uid: data.uid, expires_at: data.expires_at });
 			setStatus("Redirecting...");
 			window.location.href = data.url;
 		} else if (data.expired) {
 			removeVm(vm);
 			renderVms();
 			setStatus("Your machine expired. Claim a new one below.");
+			setButtonsDisabled(false);
 			if (!atCap()) await loadPoolButtons();
 		} else {
 			setStatus(data.detail || "Reconnect failed. Please try again.", "error");
 			setRowDisabled(row, false);
+			setButtonsDisabled(false);
 		}
 	} catch (error) {
 		setStatus("Network error. Please try again.", "error");
 		setRowDisabled(row, false);
+		setButtonsDisabled(false);
 	}
 }
 
@@ -323,10 +345,12 @@ function resumeTickets() {
 }
 
 async function handleTerminalAccess(pool, btn) {
+	refreshVms();
 	if (atCap()) {
 		openSwapModal(() => handleTerminalAccess(pool, btn));
 		return;
 	}
+	if (polls.size) return;
 	setButtonsDisabled(true);
 	setStatus("Assigning your machine...");
 
@@ -359,6 +383,7 @@ async function handleTerminalAccess(pool, btn) {
 }
 
 async function claimByCode(code) {
+	refreshVms();
 	if (atCap()) {
 		openSwapModal(() => claimByCode(code));
 		return;
@@ -628,6 +653,7 @@ function redeemFailed(detail) {
 }
 
 async function redeemCode() {
+	refreshVms();
 	if (atCap()) {
 		const code = codeInput.value.trim();
 		codeDialog.close();
@@ -690,6 +716,12 @@ function openSwapModal(claimFn) {
 		const label = document.createElement("span");
 		label.className = "vm-label";
 		label.innerText = vm.pool || "Workshop VM";
+		if (vm.expires_at) {
+			const expiry = document.createElement("span");
+			expiry.className = "vm-expiry";
+			expiry.innerText = expiryText(vm.expires_at);
+			label.appendChild(expiry);
+		}
 		const btn = document.createElement("button");
 		btn.className = "danger";
 		btn.innerText = "Release & claim";
@@ -735,6 +767,9 @@ swapCancelBtn.addEventListener("click", () => swapDialog.close());
 swapDialog.addEventListener("close", () => {
 	pendingClaim = null;
 	for (const btn of swapOptions.querySelectorAll("button")) btn.disabled = false;
+});
+window.addEventListener("storage", (e) => {
+	if (e.key === "assigned_vm_urls") refreshVms();
 });
 provisionCloseBtn.addEventListener("click", () => {
 	releaseProvision();
