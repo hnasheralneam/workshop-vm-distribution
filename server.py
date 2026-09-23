@@ -321,6 +321,62 @@ def claim():
     return jsonify(url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
 
 
+def provision_running_for(code):
+    with job_lock:
+        job = jobs["provision"]
+        return bool(job and job["status"] == "running" and job.get("pool_code") == code)
+
+
+def start_ticket():
+    ticket = str(uuid.uuid4())
+    with ticket_lock:
+        redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
+    return ticket
+
+
+def run_claim_wait(ticket, config):
+    code = normalize_code(config.get("pool_code"))
+    state = {}
+    try:
+        while True:
+            state = {}
+
+            def reserve(entries):
+                available = [e for e in entries if is_available(e) and entry_ref(e) == code]
+                if available:
+                    entry = random.choice(available)
+                    entry["reserved"] = True
+                    state["entry"] = entry
+                return entries
+
+            poolstore.update(POOL_FILE, reserve)
+            if "entry" in state:
+                entry = state["entry"]
+
+                def predicate(e):
+                    return is_available(e) and entry_ref(e) == code
+
+                url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
+                if url is not None:
+                    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
+                    set_ticket(ticket, status="ready", url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
+                    return
+            if not provision_running_for(code):
+                break
+            time.sleep(3)
+
+        if config.get("dispenser"):
+            threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
+        else:
+            set_ticket(ticket, status="error", detail=f"No VMs available in pool {config_pool_name(config)!r} right now.")
+    except Exception as exc:
+        applog.log.info(f"Claim wait failed: {exc}")
+        if state.get("entry"):
+            entry_vmid = state["entry"]["vmid"]
+            poolstore.update(POOL_FILE, lambda es: unreserve(es, entry_vmid))
+        set_ticket(ticket, status="error", detail="Provisioning failed. Please try again.")
+
+
 def claim_from_pool(config):
     code = normalize_code(config.get("pool_code"))
     pool_name = config_pool_name(config)
@@ -347,11 +403,14 @@ def claim_from_pool(config):
         poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
         return jsonify(status="ready", url=url, pool=pool_name, expires_at=state.get("expires_at"), uid=state.get("uid"))
 
+    if provision_running_for(code):
+        ticket = start_ticket()
+        threading.Thread(target=run_claim_wait, args=(ticket, config), daemon=True).start()
+        return jsonify(status="provisioning", ticket=ticket, pool=pool_name), 202
+
     if not config.get("dispenser"):
         return jsonify(detail=f"No VMs available in pool {pool_name!r} right now."), 404
-    ticket = str(uuid.uuid4())
-    with ticket_lock:
-        redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
+    ticket = start_ticket()
     threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
     return jsonify(status="provisioning", ticket=ticket, pool=pool_name), 202
 
@@ -531,7 +590,7 @@ def run_redeem_provision(ticket, config):
     try:
         config = provision.build_config(config)
         pool_name = config_pool_name(config)
-        student_id = provision.allocate_student_ids(pool_name, config["url_output_file"], 1)[0]
+        student_id = provision.allocate_student_ids(config, 1)[0]
         vmid, student_id, url, expires_at = provision.provision_one(config, student_id, log)
         set_ticket(ticket, stage="adding")
         entry = {
@@ -602,7 +661,7 @@ def job_log_appender(job):
     return append
 
 
-def start_job(kind, target, *target_args):
+def start_job(kind, target, *target_args, pool_code=None):
     """One job per kind."""
     with job_lock:
         job = jobs[kind]
@@ -611,6 +670,7 @@ def start_job(kind, target, *target_args):
         job = {
             "id": str(uuid.uuid4()),
             "kind": kind,
+            "pool_code": pool_code,
             "status": "running",
             "log": [],
             "started_at": time.time(),
@@ -681,7 +741,7 @@ def admin_provision():
 
     poolstore.update(CONFIGS_FILE, save, dict)
 
-    job = start_job("provision", provision.run_parallel_provisioning, config, count)
+    job = start_job("provision", provision.run_parallel_provisioning, config, count, pool_code=normalize_code(config.get("pool_code")))
     if job is None:
         return jsonify(detail="A provision job is already running."), 409
     return jsonify(job_id=job["id"])
@@ -816,7 +876,7 @@ def admin_redeploy():
     if not state.get("done"):
         return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
 
-    job = start_job("provision", provision.run_parallel_provisioning, config, count)
+    job = start_job("provision", provision.run_parallel_provisioning, config, count, pool_code=normalize_code(config.get("pool_code")))
     if job is None:
         return jsonify(detail="A provision job is already running."), 409
     return jsonify(job_id=job["id"])

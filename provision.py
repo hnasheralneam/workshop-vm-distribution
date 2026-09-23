@@ -126,7 +126,8 @@ def get_proxmox_client(config):
         user=config["proxmox_user"],
         token_name=config["proxmox_token_name"],
         token_value=config["proxmox_token_secret"],
-        verify_ssl=VERIFY_SSL
+        verify_ssl=VERIFY_SSL,
+        timeout=30
     )
     if config["proxmox_scheme"] == "http":
         proxmox._store["base_url"] = proxmox._store["base_url"].replace("https://", "http://", 1)
@@ -251,14 +252,39 @@ def ensure_not_template(node, vmid):
         raise RuntimeError(f"VM {vmid} is a template and will never be destroyed")
 
 
-def provision_worker(proxmox, config, vmid, student_id, log):
+vmid_lock = threading.Lock()
+last_allocated_vmid = 0
+
+
+def allocate_vmid(proxmox):
+    global last_allocated_vmid
+    with vmid_lock:
+        vmid = max(int(proxmox.cluster.nextid.get()), last_allocated_vmid + 1)
+        last_allocated_vmid = vmid
+        return vmid
+
+
+def clone_template(proxmox, config, student_id, log):
+    node = proxmox.nodes(config["proxmox_node"])
+    for attempt in range(3):
+        vmid = allocate_vmid(proxmox)
+        try:
+            log(f"[{vmid}] Cloning template...")
+            upid = node.qemu(config["template_vm_id"]).clone.post(newid=vmid, name=f"workshop-{student_id}", full=0)
+            return vmid, upid
+        except Exception as exc:
+            if attempt == 2 or "already exists" not in str(exc).lower():
+                raise
+
+
+def provision_worker(proxmox, config, student_id, log):
     node = proxmox.nodes(config["proxmox_node"])
     access_method = config["template_vm_access_method"]
+    vmid = None
     upid = None
 
     try:
-        log(f"[{vmid}] Cloning template...")
-        upid = node.qemu(config["template_vm_id"]).clone.post(newid=vmid, name=f"workshop-{student_id}", full=0)
+        vmid, upid = clone_template(proxmox, config, student_id, log)
         wait_for_task(node, upid)
 
         log(f"[{vmid}] Booting VM...")
@@ -279,6 +305,8 @@ def provision_worker(proxmox, config, vmid, student_id, log):
                 wait_for_task(node, upid)
             except Exception:
                 pass
+        if vmid is None:
+            raise
         try:
             from destroy import destroy_worker
             destroy_worker(proxmox, config["proxmox_node"], vmid, f"workshop-{student_id}", log)
@@ -300,16 +328,26 @@ student_id_lock = threading.Lock()
 student_id_counters = {}
 
 
-def allocate_student_ids(pool_name, pool_file, count):
-    slug = pool_slug(pool_name)
+def allocate_student_ids(config, count):
+    slug = pool_slug(config["pool_name"])
     with student_id_lock:
         if slug not in student_id_counters:
-            entries = poolstore.load(pool_file) if pool_file and os.path.exists(pool_file) else []
+            entries = poolstore.load(config["url_output_file"]) if config["url_output_file"] and os.path.exists(config["url_output_file"]) else []
             nums = []
             for e in entries:
                 head, _, tail = e.get("student_id", "").rpartition("-")
                 if head == slug and tail.isdigit():
                     nums.append(int(tail))
+            try:
+                proxmox = get_proxmox_client(config)
+                for vm in proxmox.nodes(config["proxmox_node"]).qemu.get():
+                    name = vm.get("name", "")
+                    if name.startswith("workshop-"):
+                        head, _, tail = name[len("workshop-"):].rpartition("-")
+                        if head == slug and tail.isdigit():
+                            nums.append(int(tail))
+            except Exception as exc:
+                applog.log.info(f"Live VM scan for student id numbering failed, using pool file only: {exc}")
             student_id_counters[slug] = max(nums, default=0)
         ids = []
         for _ in range(count):
@@ -320,29 +358,15 @@ def allocate_student_ids(pool_name, pool_file, count):
 
 def provision_one(config, student_id, log=applog.log.info):
     proxmox = get_proxmox_client(config)
-    vmid = int(proxmox.cluster.nextid.get())
-    return provision_worker(proxmox, config, vmid, student_id, log)
+    return provision_worker(proxmox, config, student_id, log)
 
 
 def run_parallel_provisioning(config, count=None, log=applog.log.info):
     proxmox = get_proxmox_client(config)
     count = count if count is not None else config["vm_count"]
 
-    log(f"\n--- Pre-allocating {count} VMIDs ---")
-    used_vmids = {vm["vmid"] for vm in proxmox.nodes(config["proxmox_node"]).qemu.get()}
-    student_ids = allocate_student_ids(config["pool_name"], config["url_output_file"], count)
-    tasks = []
-    candidate_vmid = int(proxmox.cluster.nextid.get())
-
-    for i in range(count):
-        while candidate_vmid in used_vmids:
-            candidate_vmid += 1
-        target_vmid = candidate_vmid
-        used_vmids.add(target_vmid)
-        candidate_vmid += 1
-
-        tasks.append((target_vmid, student_ids[i]))
-        log(f"Allocated {target_vmid} to {student_ids[i]}")
+    student_ids = allocate_student_ids(config, count)
+    tasks = student_ids
 
     log("\n--- Firing off Proxmox Clones in Parallel ---")
     results = []
@@ -350,8 +374,8 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
     # keep max_workers low or parallel clones hammer the Proxmox API
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
-            executor.submit(provision_worker, proxmox, config, vmid, sid, log): sid
-            for vmid, sid in tasks
+            executor.submit(provision_worker, proxmox, config, sid, log): sid
+            for sid in tasks
         }
 
         for future in concurrent.futures.as_completed(futures):

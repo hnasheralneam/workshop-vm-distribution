@@ -6,7 +6,7 @@ import os
 
 import applog
 import poolstore
-from provision import build_config, get_proxmox_client, ensure_not_template
+from provision import build_config, get_proxmox_client, ensure_not_template, wait_for_task
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -50,7 +50,7 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
             raise RuntimeError(f"VM {vmid} is now {identity!r}, aborting destroy")
 
         log(f"[{vmid}] 💥 Destroying {vm_name}...")
-        node.qemu(vmid).delete()
+        wait_for_task(node, node.qemu(vmid).delete(), 120)
         return f"✅ Successfully destroyed {vm_name} ({vmid})"
 
     except Exception as e:
