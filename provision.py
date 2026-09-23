@@ -256,10 +256,13 @@ vmid_lock = threading.Lock()
 last_allocated_vmid = 0
 
 
-def allocate_vmid(proxmox):
+def allocate_vmid(proxmox, node):
     global last_allocated_vmid
     with vmid_lock:
         vmid = max(int(proxmox.cluster.nextid.get()), last_allocated_vmid + 1)
+        used = {vm["vmid"] for vm in node.qemu.get()}
+        while vmid in used:
+            vmid += 1
         last_allocated_vmid = vmid
         return vmid
 
@@ -267,7 +270,7 @@ def allocate_vmid(proxmox):
 def clone_template(proxmox, config, student_id, log):
     node = proxmox.nodes(config["proxmox_node"])
     for attempt in range(3):
-        vmid = allocate_vmid(proxmox)
+        vmid = allocate_vmid(proxmox, node)
         try:
             log(f"[{vmid}] Cloning template...")
             upid = node.qemu(config["template_vm_id"]).clone.post(newid=vmid, name=f"workshop-{student_id}", full=0)
