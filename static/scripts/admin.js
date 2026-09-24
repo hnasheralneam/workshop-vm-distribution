@@ -18,6 +18,7 @@ const deployHint = document.getElementById("deploy-hint");
 const groupSeg = document.querySelector('.segmented[data-input="group"]');
 const accessSeg = document.querySelector('.segmented[data-input="template_vm_access_method"]');
 const poolSearch = document.getElementById("pool-search");
+const poolSortSelect = document.getElementById("pool-sort");
 const poolEmpty = document.getElementById("pool-empty");
 const logsBtn = document.getElementById("logs-btn");
 const logsDialog = document.getElementById("logs-dialog");
@@ -188,11 +189,13 @@ function fallbackCopy(text) {
 
 let poolList = [];
 let poolFilter = "all";
+let poolSort = "recent";
 const POOL_GROUPS = ["Workshop", "Challenge", "Generic"];
 let activeGroup = "All";
 let priorGroup = "All";
 const groupOf = (p) => (POOL_GROUPS.includes(p.config.group) ? p.config.group : "Generic");
 const poolRecency = (p) => Math.max(p.last_used || 0, p.config.modified_at || 0);
+const isWin = (p) => p.config.template_vm_access_method === "rdp";
 
 const POOL_FILTERS = {
    all: () => true,
@@ -200,6 +203,14 @@ const POOL_FILTERS = {
    free: (p) => p.available > 0,
    dispenser: (p) => !!p.config.dispenser,
    private: (p) => !!p.config.private,
+};
+
+const POOL_SORTS = {
+   recent: null,
+   name: (a, b) => a.name.localeCompare(b.name),
+   os: (a, b) => (isWin(b) ? 1 : 0) - (isWin(a) ? 1 : 0) || a.name.localeCompare(b.name),
+   private: (a, b) => (b.config.private ? 1 : 0) - (a.config.private ? 1 : 0) || a.name.localeCompare(b.name),
+   dispenser: (a, b) => (b.config.dispenser ? 1 : 0) - (a.config.dispenser ? 1 : 0) || a.name.localeCompare(b.name),
 };
 
 async function loadPools() {
@@ -255,8 +266,7 @@ function buildPoolCard(pool) {
       }
       const os = document.createElement("span");
       os.className = "pool-os";
-      const rdp = pool.config.template_vm_access_method === "rdp";
-      os.textContent = rdp ? "Windows" : "Linux";
+      os.textContent = isWin(pool) ? "Windows" : "Linux";
       const type = document.createElement("span");
       type.className = "pool-type";
       type.textContent = groupOf(pool);
@@ -325,7 +335,7 @@ function buildPoolCard(pool) {
       btn.className = "deploy-btn";
       btn.disabled = runningJob !== null;
       btn.textContent = "Deploy";
-      if (pool.config.template_vm_access_method === "rdp") btn.classList.add("win");
+      if (isWin(pool)) btn.classList.add("win");
       btn.addEventListener("click", () => {
          if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
          startJob("/api/admin/redeploy", { code: pool.code, count: parseInt(input.value, 10) });
@@ -368,7 +378,9 @@ function renderPools() {
    }
    redeployRows.classList.add("has-rows");
    redeployRows.append(buildPoolHeader());
-   for (const pool of poolList) redeployRows.appendChild(buildPoolCard(pool));
+   const sort = POOL_SORTS[poolSort];
+   const list = sort ? [...poolList].sort(sort) : poolList;
+   for (const pool of list) redeployRows.appendChild(buildPoolCard(pool));
    applyPoolView();
 }
 
@@ -424,6 +436,10 @@ for (const chip of document.querySelectorAll("#pool-filters .filter-chip")) {
       applyPoolView();
    });
 }
+poolSortSelect.addEventListener("change", () => {
+   poolSort = poolSortSelect.value;
+   renderPools();
+});
 async function updatePoolStats() {
    const res = await fetch("/api/admin/pools");
    if (!res.ok) return;

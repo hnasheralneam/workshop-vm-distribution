@@ -307,6 +307,12 @@ body.admin #pool-search {
 	padding: 0.4rem 0.6rem;
 }
 
+body.admin #pool-sort {
+	width: auto;
+	flex: 0 0 auto;
+	padding: 0.4rem 0.6rem;
+}
+
 body.admin .filter-chip {
 	font-size: 0.78rem;
 	font-weight: 500;
