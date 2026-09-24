@@ -600,7 +600,7 @@ dialog .modal-actions {
 
 #deploy-dialog {
 	width: min(560px, 92vw);
-	max-height: min(720px, 92vh);
+	max-height: calc(100vh - 2rem);
 	padding: 0;
 	text-align: left;
 	overflow: hidden;
