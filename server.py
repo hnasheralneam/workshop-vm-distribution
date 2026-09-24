@@ -732,7 +732,6 @@ def admin_pool():
             "vmid": entry.get("vmid"),
             "student_id": entry.get("student_id"),
             "pool": ref_label(configs, entry_ref(entry)),
-            "url": entry.get("url"),
             "claimed": entry.get("claimed") or entry.get("reserved"),
             "expired": is_expired(entry),
             "expires_at": entry.get("expires_at"),
@@ -754,6 +753,7 @@ def admin_provision():
     count = config["vm_count"]
 
     def save(configs):
+        config["modified_at"] = time.time()
         config["pool_code"] = generate_pool_code({normalize_code(c.get("pool_code")) for c in configs.values()})
         configs[config["pool_code"]] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
         return configs
@@ -784,12 +784,13 @@ def admin_pools():
     stats = {}
     for entry in poolstore.load(POOL_FILE):
         ref = entry_ref(entry)
-        info = stats.setdefault(ref, {"total": 0, "available": 0, "in_use": False, "last_used": 0})
+        info = stats.setdefault(ref, {"total": 0, "available": 0, "in_use": 0, "last_used": 0})
         info["total"] += 1
         if is_available(entry):
             info["available"] += 1
         active = (entry.get("claimed") or entry.get("reserved")) and not is_expired(entry)
-        info["in_use"] = info["in_use"] or bool(active)
+        if active:
+            info["in_use"] += 1
         info["last_used"] = max(info["last_used"], entry_activity(entry, now))
     pools = [
         {
@@ -797,7 +798,7 @@ def admin_pools():
             "code": code,
             "available": stats.get(code, {}).get("available", 0),
             "total": stats.get(code, {}).get("total", 0),
-            "in_use": stats.get(code, {}).get("in_use", False),
+            "in_use": stats.get(code, {}).get("in_use", 0),
             "last_used": stats.get(code, {}).get("last_used", 0),
             "count": cfg.get("vm_count", 5),
             "config": {k: v for k, v in cfg.items() if k not in provision.SECRET_FIELDS},
@@ -831,6 +832,7 @@ def admin_update_pool(code):
 
     def replace(configs):
         if code in configs:
+            config["modified_at"] = time.time()
             configs[code] = {k: v for k, v in config.items() if k not in provision.GLOBAL_FIELDS}
             state["done"] = True
         return configs
@@ -882,6 +884,7 @@ def admin_redeploy():
     def save(configs):
         if code in configs:
             configs[code]["vm_count"] = count
+            configs[code]["modified_at"] = time.time()
             state["done"] = True
         return configs
 
@@ -982,7 +985,7 @@ def normalize_configs(configs):
     normalized = {}
     used = set()
     for cfg in configs.values():
-        cfg = {**{k: v for k, v in cfg.items() if k not in provision.GLOBAL_FIELDS}, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private"))}
+        cfg = {**{k: v for k, v in cfg.items() if k not in provision.GLOBAL_FIELDS}, "dispenser": cfg.get("dispenser", True), "private": bool(cfg.get("private")), "group": cfg.get("group") if cfg.get("group") in provision.GROUPS else "Generic", "modified_at": cfg.get("modified_at", 0)}
         code = normalize_code(cfg.get("pool_code"))
         if not code:
             applog.log.warning(f"Pool {config_pool_name(cfg)!r} has no pool code; add one in configs.json to make it claimable.")

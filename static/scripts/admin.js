@@ -13,6 +13,10 @@ const newDeployBtn = document.getElementById("new-deploy-btn");
 const deployCancelBtn = document.getElementById("deploy-cancel-btn");
 const dispenserInput = document.getElementById("dispenser");
 const privateInput = document.getElementById("private");
+const deployCode = document.getElementById("deploy-code");
+const deployHint = document.getElementById("deploy-hint");
+const groupSeg = document.querySelector('.segmented[data-input="group"]');
+const accessSeg = document.querySelector('.segmented[data-input="template_vm_access_method"]');
 const poolSearch = document.getElementById("pool-search");
 const poolEmpty = document.getElementById("pool-empty");
 const logsBtn = document.getElementById("logs-btn");
@@ -184,10 +188,15 @@ function fallbackCopy(text) {
 
 let poolList = [];
 let poolFilter = "all";
+const POOL_GROUPS = ["Workshop", "Challenge", "Generic"];
+let activeGroup = "All";
+let priorGroup = "All";
+const groupOf = (p) => (POOL_GROUPS.includes(p.config.group) ? p.config.group : "Generic");
+const poolRecency = (p) => Math.max(p.last_used || 0, p.config.modified_at || 0);
 
 const POOL_FILTERS = {
    all: () => true,
-   "in-use": (p) => p.in_use,
+   "in-use": (p) => p.in_use > 0,
    free: (p) => p.available > 0,
    dispenser: (p) => !!p.config.dispenser,
    private: (p) => !!p.config.private,
@@ -197,7 +206,7 @@ async function loadPools() {
    const res = await fetch("/api/admin/pools");
    if (!res.ok) return;
    poolList = await res.json();
-   poolList.sort((a, b) => (b.last_used || 0) - (a.last_used || 0) || a.name.localeCompare(b.name));
+   poolList.sort((a, b) => poolRecency(b) - poolRecency(a) || a.name.localeCompare(b.name));
    renderPools();
 }
 
@@ -207,43 +216,55 @@ function buildPoolCard(pool) {
       card.dataset.pool = pool.code;
       card.dataset.name = pool.name.toLowerCase();
       card.dataset.available = pool.available;
-      card.dataset.inUse = pool.in_use ? "1" : "0";
+      card.dataset.total = pool.total;
+      card.dataset.inUse = pool.in_use;
       card.dataset.dispenser = pool.config.dispenser ? "1" : "0";
       card.dataset.private = pool.config.private ? "1" : "0";
-      const header = document.createElement("div");
-      header.className = "pool-header";
-      const title = document.createElement("div");
-      title.className = "pool-title";
-      const name = document.createElement("h3");
-      name.textContent = pool.name;
-      title.append(name);
-      if (pool.config.pool_code) {
-         const chip = document.createElement("button");
-         chip.type = "button";
-         chip.className = "pool-code";
-         chip.dataset.tip = "Copy claim code";
-         chip.textContent = pool.config.pool_code;
-         chip.addEventListener("click", () => {
-            copyToClipboard(pool.config.pool_code);
-            chip.textContent = "Copied!";
-            setTimeout(() => { chip.textContent = pool.config.pool_code; }, 1500);
-         });
-         title.append(chip);
-      }
+      card.dataset.group = groupOf(pool);
+      const name = document.createElement("div");
+      name.className = "pool-name";
+      const nameText = document.createElement("h3");
+      nameText.textContent = pool.name;
+      name.append(nameText);
       if (pool.config.dispenser) {
          const flag = document.createElement("span");
          flag.className = "pool-flag";
          flag.dataset.tip = "Dispenser: clones a VM when none are free";
          flag.innerHTML = ICONS.dispense;
-         title.append(flag);
+         name.append(flag);
       }
-      const count = document.createElement("span");
-      count.className = "pool-count";
-      count.dataset.tip = `${pool.available} available, ${pool.total} total`;
-      count.setAttribute("aria-label", `${pool.available} available, ${pool.total} total`);
-      count.textContent = `${pool.available} / ${pool.total}`;
-      header.append(title, count);
-      card.append(header);
+      const code = document.createElement("span");
+      code.className = "pool-code";
+      code.dataset.tip = "Copy claim code";
+      if (pool.config.pool_code) {
+         code.textContent = pool.config.pool_code;
+         code.setAttribute("role", "button");
+         code.tabIndex = 0;
+         const copy = () => {
+            copyToClipboard(pool.config.pool_code);
+            code.textContent = "Copied!";
+            setTimeout(() => { code.textContent = pool.config.pool_code; }, 1500);
+         };
+         code.addEventListener("click", copy);
+         code.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+               e.preventDefault();
+               copy();
+            }
+         });
+      }
+      const os = document.createElement("span");
+      os.className = "pool-os";
+      const rdp = pool.config.template_vm_access_method === "rdp";
+      os.textContent = rdp ? "Windows" : "Linux";
+      const type = document.createElement("span");
+      type.className = "pool-type";
+      type.textContent = groupOf(pool);
+      const inUse = document.createElement("span");
+      inUse.className = "pool-count";
+      inUse.dataset.tip = `${pool.available} free of ${pool.total}`;
+      inUse.setAttribute("aria-label", `${pool.available} free of ${pool.total}`);
+      inUse.textContent = `${pool.in_use} / ${pool.total}`;
       const actions = document.createElement("div");
       actions.className = "pool-actions";
       const linkBtn = document.createElement("button");
@@ -257,9 +278,16 @@ function buildPoolCard(pool) {
          linkBtn.innerHTML = ICONS.check;
          setTimeout(() => { linkBtn.innerHTML = ICONS.link; }, 1500);
       });
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "icon-btn";
+      editBtn.dataset.tip = "Edit pool";
+      editBtn.setAttribute("aria-label", "Edit pool");
+      editBtn.innerHTML = ICONS.edit;
+      editBtn.addEventListener("click", () => openDeployModal(pool));
       const lockBtn = document.createElement("button");
       lockBtn.type = "button";
-      lockBtn.className = "icon-btn";
+      lockBtn.className = "icon-btn lock-btn";
       const syncLock = () => {
          lockBtn.innerHTML = pool.config.private ? ICONS.lock : ICONS.lockOpen;
          const tip = pool.config.private ? "Private: click to toggle" : "Public: click to toggle";
@@ -282,13 +310,6 @@ function buildPoolCard(pool) {
             alert(data.detail || "Failed to update pool.");
          }
       });
-      const editBtn = document.createElement("button");
-      editBtn.type = "button";
-      editBtn.className = "icon-btn";
-      editBtn.dataset.tip = "Edit pool";
-      editBtn.setAttribute("aria-label", "Edit pool");
-      editBtn.innerHTML = ICONS.edit;
-      editBtn.addEventListener("click", () => openDeployModal(pool));
       const deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
       deleteBtn.className = "icon-btn danger";
@@ -296,9 +317,6 @@ function buildPoolCard(pool) {
       deleteBtn.setAttribute("aria-label", "Delete pool");
       deleteBtn.innerHTML = ICONS.trash;
       deleteBtn.addEventListener("click", () => deletePool(pool));
-      actions.append(linkBtn, lockBtn, editBtn, deleteBtn);
-      const spacer = document.createElement("span");
-      spacer.className = "spacer";
       const input = document.createElement("input");
       input.type = "number";
       input.min = "1";
@@ -307,46 +325,98 @@ function buildPoolCard(pool) {
       btn.className = "deploy-btn";
       btn.disabled = runningJob !== null;
       btn.textContent = "Deploy";
+      if (pool.config.template_vm_access_method === "rdp") btn.classList.add("win");
       btn.addEventListener("click", () => {
          if (!confirm(`Deploy ${input.value} VM(s) to pool "${pool.name}"?`)) return;
          startJob("/api/admin/redeploy", { code: pool.code, count: parseInt(input.value, 10) });
       });
-      const group = document.createElement("div");
-      group.className = "deploy-group";
-      group.append(btn, input);
-      actions.append(spacer, group);
-      card.append(actions);
+      const deployGroup = document.createElement("div");
+      deployGroup.className = "deploy-group";
+      deployGroup.append(btn, input);
+      card.append(name, code, os, type, inUse, actions, deployGroup);
+      actions.append(linkBtn, editBtn, lockBtn, deleteBtn);
       return card;
 }
 
+function updateTabCounts() {
+   for (const tab of document.querySelectorAll("#pool-tabs .pool-tab")) {
+      const g = tab.dataset.group;
+      tab.querySelector(".pool-tab-count").textContent = g === "All" ? poolList.length : poolList.filter((p) => groupOf(p) === g).length;
+   }
+}
+
+function buildPoolHeader() {
+   const head = document.createElement("div");
+   head.className = "pool-list-header";
+   for (const label of ["Name", "Code", "OS", "Type", "In use", "Actions", ""]) {
+      const cell = document.createElement("span");
+      cell.textContent = label;
+      if (label === "Type") cell.className = "pool-type";
+      head.append(cell);
+   }
+   return head;
+}
+
 function renderPools() {
+   updateTabCounts();
    redeployRows.innerHTML = "";
    if (poolList.length === 0) {
+      redeployRows.classList.remove("has-rows");
       redeployRows.textContent = "No pools.";
       poolEmpty.hidden = true;
       return;
    }
+   redeployRows.classList.add("has-rows");
+   redeployRows.append(buildPoolHeader());
    for (const pool of poolList) redeployRows.appendChild(buildPoolCard(pool));
    applyPoolView();
 }
 
 function applyPoolView() {
+   redeployRows.classList.toggle("view-all", activeGroup === "All");
    const q = poolSearch.value.trim().toLowerCase();
    let visible = 0;
    for (const card of redeployRows.querySelectorAll(".pool-card")) {
       const pool = {
          available: parseInt(card.dataset.available, 10) || 0,
-         in_use: card.dataset.inUse === "1",
+         in_use: parseInt(card.dataset.inUse, 10) || 0,
          config: { dispenser: card.dataset.dispenser === "1", private: card.dataset.private === "1" },
       };
-      const ok = (!q || card.dataset.name.includes(q)) && POOL_FILTERS[poolFilter](pool);
+      const ok = (activeGroup === "All" || card.dataset.group === activeGroup) && (!q || card.dataset.name.includes(q)) && POOL_FILTERS[poolFilter](pool);
       card.classList.toggle("hidden", !ok);
       if (ok) visible++;
    }
-   poolEmpty.hidden = visible > 0;
+   if (visible > 0) {
+      poolEmpty.hidden = true;
+   } else {
+      const anyInTab = activeGroup === "All" || [...redeployRows.querySelectorAll(".pool-card")].some((c) => c.dataset.group === activeGroup);
+      poolEmpty.textContent = anyInTab ? "No pools match." : "No pools here yet.";
+      poolEmpty.hidden = false;
+   }
+   const head = redeployRows.querySelector(".pool-list-header");
+   if (head) head.classList.toggle("hidden", visible === 0);
 }
 
-poolSearch.addEventListener("input", applyPoolView);
+function setGroup(group) {
+   activeGroup = group;
+   if (group !== "All") priorGroup = group;
+   for (const tab of document.querySelectorAll("#pool-tabs .pool-tab")) tab.classList.toggle("active", tab.dataset.group === activeGroup);
+   applyPoolView();
+}
+
+poolSearch.addEventListener("input", () => {
+   if (poolSearch.value.trim()) {
+      if (activeGroup !== "All") setGroup("All");
+      else applyPoolView();
+   } else if (activeGroup === "All" && priorGroup !== "All") {
+      setGroup(priorGroup);
+   } else {
+      applyPoolView();
+   }
+});
+for (const tab of document.querySelectorAll("#pool-tabs .pool-tab")) {
+   tab.addEventListener("click", () => setGroup(tab.dataset.group));
+}
 for (const chip of document.querySelectorAll("#pool-filters .filter-chip")) {
    chip.addEventListener("click", () => {
       poolFilter = chip.dataset.filter;
@@ -354,7 +424,6 @@ for (const chip of document.querySelectorAll("#pool-filters .filter-chip")) {
       applyPoolView();
    });
 }
-
 async function updatePoolStats() {
    const res = await fetch("/api/admin/pools");
    if (!res.ok) return;
@@ -363,14 +432,20 @@ async function updatePoolStats() {
       const card = redeployRows.querySelector(`[data-pool="${CSS.escape(pool.code)}"]`);
       if (!card) continue;
       const count = card.querySelector(".pool-count");
-      count.textContent = `${pool.available} / ${pool.total}`;
-      count.dataset.tip = `${pool.available} available, ${pool.total} total`;
-      count.setAttribute("aria-label", `${pool.available} available, ${pool.total} total`);
+      count.textContent = `${pool.in_use} / ${pool.total}`;
+      count.dataset.tip = `${pool.available} free of ${pool.total}`;
+      count.setAttribute("aria-label", `${pool.available} free of ${pool.total}`);
       card.dataset.available = pool.available;
-      card.dataset.inUse = pool.in_use ? "1" : "0";
+      card.dataset.total = pool.total;
+      card.dataset.inUse = pool.in_use;
       card.querySelector(".deploy-btn").disabled = runningJob !== null;
    }
    applyPoolView();
+}
+
+function setSegment(seg, value) {
+   provisionForm.elements[seg.dataset.input].value = value;
+   for (const btn of seg.children) btn.classList.toggle("active", btn.dataset.value === value);
 }
 
 function openDeployModal(pool) {
@@ -379,12 +454,17 @@ function openDeployModal(pool) {
    passwordField.required = !pool;
    if (pool) {
       deployTitle.textContent = `Edit pool: ${pool.name}`;
+      deployCode.textContent = pool.code;
+      deployCode.dataset.code = pool.code;
+      deployCode.hidden = false;
+      deployHint.textContent = "Saves the pool config. Running VMs are unchanged.";
       provisionForm.elements.pool_name.value = pool.name;
       provisionForm.elements.vm_count.value = pool.count;
-      provisionForm.elements.vm_duration_hours.value = pool.config.guac_link_ttl_seconds / 3600;
+      provisionForm.elements.vm_duration_hours.value = parseFloat((pool.config.guac_link_ttl_seconds / 3600).toFixed(2));
       dispenserInput.checked = !!pool.config.dispenser;
       privateInput.checked = !!pool.config.private;
-      provisionForm.elements.template_vm_access_method.value = pool.config.template_vm_access_method;
+      setSegment(groupSeg, groupOf(pool));
+      setSegment(accessSeg, pool.config.template_vm_access_method);
       provisionForm.elements.template_vm_id.value = pool.config.template_vm_id;
       provisionForm.elements.template_vm_username.value = pool.config.template_vm_username ?? "";
       passwordField.value = "";
@@ -392,20 +472,23 @@ function openDeployModal(pool) {
       provisionBtn.textContent = "Save";
    } else {
       deployTitle.textContent = "New pool";
-      provisionForm.elements.pool_name.disabled = false;
+      deployCode.hidden = true;
+      deployHint.textContent = "Provisioning clones VMs from the template immediately after saving.";
       provisionForm.elements.pool_name.value = "";
       provisionForm.elements.vm_count.value = 5;
       provisionForm.elements.vm_duration_hours.value = 2;
-      provisionForm.elements.template_vm_access_method.value = "ssh";
       provisionForm.elements.template_vm_username.value = "";
       provisionForm.elements.template_vm_id.value = "";
       dispenserInput.checked = true;
       privateInput.checked = false;
+      setSegment(groupSeg, "Generic");
+      setSegment(accessSeg, "ssh");
       passwordField.value = "";
       passwordField.placeholder = "";
       provisionBtn.textContent = "Provision";
    }
    deployDialog.showModal();
+   deployDialog.querySelector(".dialog-body").scrollTop = 0;
 }
 
 extendSelectedBtn.addEventListener("click", async () => {
@@ -541,6 +624,28 @@ newDeployBtn.addEventListener("click", () => openDeployModal(null));
 deployCancelBtn.addEventListener("click", () => deployDialog.close());
 deployDialog.addEventListener("click", (e) => {
    if (e.target === deployDialog) deployDialog.close();
+});
+
+for (const seg of [groupSeg, accessSeg]) {
+   seg.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (btn) setSegment(seg, btn.dataset.value);
+   });
+}
+
+function copyDeployCode() {
+   if (!deployCode.dataset.code) return;
+   copyToClipboard(deployCode.dataset.code);
+   deployCode.textContent = "Copied!";
+   setTimeout(() => { deployCode.textContent = deployCode.dataset.code; }, 1500);
+}
+
+deployCode.addEventListener("click", copyDeployCode);
+deployCode.addEventListener("keydown", (e) => {
+   if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      copyDeployCode();
+   }
 });
 
 destroyAllBtn.addEventListener("click", () => {

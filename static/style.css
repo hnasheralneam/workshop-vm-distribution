@@ -18,6 +18,10 @@
 	--accent-contrast: #0f1115;
 	--danger: #f87171;
 
+	--win-bg: #3b82f6;
+	--win-hover: #2f76ee;
+	--win-contrast: #ffffff;
+
 	--control-bg: #2a2e37;
 	--control-hover: #343945;
 	--disabled-bg: #2a2e37;
@@ -48,6 +52,10 @@
 		--accent-hover: #16a34a;
 		--accent-contrast: #ffffff;
 		--danger: #dc2626;
+
+		--win-bg: #2563eb;
+		--win-hover: #1d4ed8;
+		--win-contrast: #ffffff;
 
 		--control-bg: #e7e9ee;
 		--control-hover: #dadde3;
@@ -205,15 +213,84 @@ body.admin .card-header button {
 	font-size: 0.8rem;
 }
 
-body.admin .pool-card {
+#redeploy-rows {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 0;
+}
+
+#redeploy-rows.has-rows {
 	background: var(--bg-inset);
 	border: 1px solid var(--border);
 	border-radius: 8px;
-	padding: 1rem;
+	overflow: hidden;
+}
+
+body.admin .pool-card {
+	display: grid;
+	grid-template-columns: minmax(10rem, 1.4fr) 4.5rem 5.5rem 5.5rem 4rem 8.5rem 8rem;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.5rem 1rem;
+	min-height: 50px;
+	border-top: 1px solid var(--border);
+	background: transparent;
+	transition: background 0.1s ease;
+}
+
+body.admin .pool-card:first-of-type {
+	border-top: none;
+}
+
+body.admin .pool-card:hover:not(.hidden) {
+	background: var(--control-bg);
 }
 
 body.admin .pool-card.hidden {
 	display: none;
+}
+
+body.admin .pool-list-header {
+	display: grid;
+	grid-template-columns: minmax(10rem, 1.4fr) 4.5rem 5.5rem 5.5rem 4rem 8.5rem 8rem;
+	gap: 0.75rem;
+	padding: 0.4rem 1rem;
+	font-size: 0.72rem;
+	font-weight: 500;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+	border-bottom: 1px solid var(--border);
+}
+
+body.admin .pool-list-header.hidden {
+	display: none;
+}
+
+body.admin .pool-list-header :nth-child(5),
+body.admin .pool-card .pool-count {
+	text-align: right;
+}
+
+body.admin .pool-list-header :nth-child(6),
+body.admin .pool-list-header :nth-child(7) {
+	text-align: right;
+}
+
+body.admin .pool-name {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	min-width: 0;
+}
+
+body.admin .pool-name h3 {
+	margin: 0;
+	font-size: 0.92rem;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 body.admin .pool-toolbar {
@@ -251,62 +328,93 @@ body.admin .filter-chip.active {
 	border-color: var(--control-bg);
 }
 
+body.admin .pool-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem;
+}
+
+body.admin .pool-tab {
+	font-size: 0.8rem;
+	font-weight: 500;
+	padding: 0.3rem 0.7rem;
+	background: transparent;
+	color: var(--text-muted);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+}
+
+body.admin .pool-tab:hover {
+	background: var(--control-bg);
+	color: var(--text);
+}
+
+body.admin .pool-tab.active {
+	background: var(--control-bg);
+	color: var(--text);
+	border-color: var(--control-bg);
+}
+
+body.admin .pool-tab-count {
+	color: var(--text-faint);
+	margin-left: 0.1rem;
+}
+
 body.admin .pool-empty {
 	color: var(--text-faint);
 	font-size: 0.85rem;
 	margin: 0;
 }
 
-body.admin .pool-header {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-}
-
-body.admin .pool-title {
-	flex: 1;
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
+body.admin .pool-code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.8rem;
+	color: var(--text-faint);
+	cursor: pointer;
 	min-width: 0;
-}
-
-body.admin .pool-title h3 {
-	margin: 0;
-	font-size: 1rem;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-body.admin .pool-code {
-	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	font-size: 0.75rem;
-	background: var(--control-bg);
-	color: var(--text-muted);
-	border-radius: 4px;
-	padding: 0.15rem 0.45rem;
-	margin: 0;
+body.admin .pool-code:hover {
+	color: var(--text);
 }
 
-body.admin .pool-code:hover:not(:disabled) {
-	background: var(--control-hover);
-	color: var(--text);
+body.admin .pool-os,
+body.admin .pool-type {
+	font-size: 0.8rem;
+	color: var(--text-muted);
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+#redeploy-rows:not(.view-all) .pool-type {
+	display: none;
+}
+
+#redeploy-rows:not(.view-all) .pool-card {
+	grid-template-columns: minmax(10rem, 1.4fr) 4.5rem 5.5rem 4rem 8.5rem 8rem;
+}
+
+#redeploy-rows:not(.view-all) .pool-list-header {
+	grid-template-columns: minmax(10rem, 1.4fr) 4.5rem 5.5rem 4rem 8.5rem 8rem;
 }
 
 body.admin .pool-count {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	font-size: 0.9rem;
+	font-size: 0.85rem;
 	color: var(--text-muted);
 	flex-shrink: 0;
+	white-space: nowrap;
 }
 
 body.admin .icon-btn {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 2.125rem;
-	height: 2.125rem;
+	width: 2rem;
+	height: 2rem;
 	padding: 0;
 	margin-top: 0;
 	background: transparent;
@@ -332,6 +440,37 @@ body.admin .icon-btn svg {
 body.admin .icon-btn.danger {
 	background: transparent;
 	color: var(--danger);
+}
+
+body.admin .pool-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.15rem;
+	justify-content: flex-end;
+}
+
+body.admin .pool-actions .icon-btn {
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+
+body.admin .pool-card:hover .pool-actions .icon-btn,
+body.admin .pool-actions .icon-btn:focus-visible {
+	opacity: 1;
+}
+
+body.admin .pool-actions .lock-btn {
+	opacity: 1;
+}
+
+body.admin .pool-card[data-private="1"] .lock-btn {
+	color: var(--status-claimed-text);
+}
+
+@media (hover: none) {
+	body.admin .pool-actions .icon-btn {
+		opacity: 1;
+	}
 }
 
 body.admin .pool-flag {
@@ -391,46 +530,38 @@ body.admin .pool-flag svg {
 	transition-delay: 0.15s;
 }
 
-body.admin .pool-actions {
+body.admin .deploy-group {
 	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 0.5rem;
-	margin-top: 0.85rem;
-	padding-top: 0.85rem;
-	border-top: 1px solid var(--border);
+	justify-content: flex-end;
 }
 
-body.admin .pool-actions .spacer {
-	flex: 1;
-}
-
-body.admin .pool-actions button {
-	font-size: 0.8rem;
-}
-
-body.admin .pool-actions input[type="number"] {
-	width: 3.25rem;
-	height: 2.125rem;
+body.admin .deploy-group input[type="number"] {
+	width: 3rem;
+	height: 2rem;
 	padding: 0 0.35rem;
 	background: var(--bg-elevated);
 	border-radius: 0 6px 6px 0;
 	text-align: center;
 }
 
-body.admin .deploy-group {
-	display: flex;
-}
-
 body.admin .deploy-group .deploy-btn {
-	height: 2.125rem;
-	padding: 0 1.1rem;
+	height: 2rem;
+	padding: 0 0.9rem;
 	margin: 0;
 	border-radius: 6px 0 0 6px;
 }
 
 body.admin button.deploy-btn:hover:not(:disabled) {
 	background: var(--accent-hover);
+}
+
+body.admin .deploy-btn.win:not(:disabled) {
+	background: var(--win-bg);
+	color: var(--win-contrast);
+}
+
+body.admin button.deploy-btn.win:hover:not(:disabled) {
+	background: var(--win-hover);
 }
 
 body.admin button:focus-visible,
@@ -465,6 +596,214 @@ dialog .modal-actions {
 	flex-wrap: wrap;
 	gap: 0.5rem;
 	margin-top: 1rem;
+}
+
+#deploy-dialog {
+	width: min(560px, 92vw);
+	max-height: min(720px, 92vh);
+	padding: 0;
+	text-align: left;
+	overflow: hidden;
+}
+
+#deploy-dialog[open] {
+	display: flex;
+	flex-direction: column;
+}
+
+#deploy-dialog form {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+#deploy-dialog .dialog-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 1.25rem 1.5rem 0.25rem;
+}
+
+#deploy-dialog .deploy-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.75rem;
+}
+
+#deploy-dialog .deploy-head h2 {
+	margin: 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+#deploy-code {
+	flex-shrink: 0;
+	background: var(--bg-inset);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 0.2rem 0.5rem;
+	max-width: 9rem;
+}
+
+#deploy-dialog .form-section {
+	margin-top: 1.25rem;
+}
+
+#deploy-dialog .form-section h3 {
+	font-size: 0.72rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--text-faint);
+	border-bottom: 1px solid var(--border);
+	padding-bottom: 0.3rem;
+	margin: 0 0 0.25rem;
+}
+
+#deploy-dialog .segmented {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.4rem;
+	margin: 0.25rem 0 0.75rem;
+}
+
+#deploy-dialog .seg-btn {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--text-muted);
+	font-size: 0.8rem;
+	font-weight: 600;
+	padding: 0.4rem 0.5rem;
+	margin: 0;
+}
+
+#deploy-dialog .seg-btn:hover:not(.active) {
+	border-color: var(--control-hover);
+	color: var(--text);
+}
+
+#deploy-dialog .seg-btn.active {
+	background: var(--control-bg);
+	border-color: transparent;
+	color: var(--text);
+}
+
+#deploy-dialog .seg-btn span {
+	display: block;
+}
+
+#deploy-dialog .seg-sub {
+	font-size: 0.68rem;
+	font-weight: 400;
+	color: var(--text-faint);
+	margin-top: 0.1rem;
+}
+
+#deploy-dialog .seg-btn.active .seg-sub {
+	color: var(--text-muted);
+}
+
+#deploy-dialog .seg-btn.active[data-value="rdp"] {
+	background: var(--win-bg);
+	color: var(--win-contrast);
+}
+
+#deploy-dialog .seg-btn.active[data-value="rdp"] .seg-sub {
+	color: color-mix(in srgb, var(--win-contrast) 75%, transparent);
+}
+
+#deploy-dialog .field-pair {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 0.75rem;
+	margin-bottom: 0.75rem;
+}
+
+#deploy-dialog .switch-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-top: 1rem;
+	font-size: 0.8rem;
+	color: var(--text);
+	cursor: pointer;
+}
+
+#deploy-dialog .switch-row input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+#deploy-dialog .switch-text {
+	min-width: 0;
+}
+
+#deploy-dialog .switch-title {
+	display: block;
+	font-size: 0.85rem;
+	color: var(--text);
+}
+
+#deploy-dialog .switch-desc {
+	display: block;
+	font-size: 0.75rem;
+	color: var(--text-muted);
+	margin-top: 0.1rem;
+}
+
+#deploy-dialog .switch-row .switch {
+	flex-shrink: 0;
+	box-sizing: border-box;
+	width: 2.125rem;
+	height: 1.375rem;
+	background: var(--control-bg);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	position: relative;
+	transition: background 0.15s;
+}
+
+#deploy-dialog .switch-row .switch::after {
+	content: "";
+	position: absolute;
+	top: 0.1875rem;
+	left: 0.1875rem;
+	width: 0.875rem;
+	height: 0.875rem;
+	border-radius: 50%;
+	background: var(--text-faint);
+	transition: transform 0.15s, background 0.15s;
+}
+
+#deploy-dialog .switch-row input:checked + .switch {
+	background: var(--accent);
+	border-color: transparent;
+}
+
+#deploy-dialog .switch-row input:checked + .switch::after {
+	transform: translateX(0.75rem);
+	background: var(--accent-contrast);
+}
+
+#deploy-dialog .switch-row input:focus-visible + .switch {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+#deploy-dialog .modal-actions {
+	justify-content: flex-end;
+	border-top: 1px solid var(--border);
+	margin-top: 1.25rem;
+	padding: 1rem 1.5rem;
 }
 
 body.admin .table-wrap {
@@ -778,12 +1117,6 @@ dialog button.secondary {
 
 .job-status {
 	display: none;
-}
-
-#redeploy-rows {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 0.75rem;
 }
 
 #provision-dialog {
@@ -1128,12 +1461,47 @@ dialog button.secondary {
 		padding: 1rem;
 	}
 
-	#redeploy-rows {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
 	body.admin table {
 		min-width: 640px;
+	}
+
+	body.admin .pool-card {
+		grid-template-columns: max-content max-content 1fr max-content;
+		grid-template-areas:
+			"name  name  name    deploy"
+			"code  os    actions count";
+		gap: 0.35rem 0.5rem;
+		padding: 0.55rem 0.85rem;
+		min-height: 0;
+	}
+
+	body.admin .pool-actions .icon-btn {
+		opacity: 1;
+	}
+
+	body.admin .pool-name { grid-area: name; }
+	body.admin .pool-code { grid-area: code; }
+	body.admin .pool-os { grid-area: os; }
+	body.admin .pool-actions { grid-area: actions; justify-content: flex-end; }
+	body.admin .pool-count { grid-area: count; }
+	body.admin .deploy-group { grid-area: deploy; }
+	body.admin .pool-type { display: none; }
+
+	body.admin .pool-list-header {
+		display: none;
+	}
+
+	#deploy-dialog .dialog-body {
+		padding: 1rem 1rem 0.25rem;
+	}
+
+	#deploy-dialog .field-pair {
+		grid-template-columns: 1fr;
+		gap: 0;
+	}
+
+	#deploy-dialog .seg-sub {
+		font-size: 0.62rem;
 	}
 
 	[data-tip]::before,

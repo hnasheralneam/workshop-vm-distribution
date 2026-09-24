@@ -42,6 +42,8 @@ TEMPLATE_FIELDS = {
     "guac_link_ttl_seconds",
 }
 
+GROUPS = ("Workshop", "Challenge", "Generic")
+
 
 class VMNotFoundError(RuntimeError):
     pass
@@ -84,6 +86,8 @@ def default_config():
         "pool_code": "",
         "dispenser": "",
         "private": "",
+        "group": "Generic",
+        "modified_at": 0,
     }
 
 
@@ -405,8 +409,8 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
     if results:
         log("\n=== ALL WORKSHOP VMS PROVISIONED ===")
         results.sort(key=lambda x: int(x[1].rsplit('-', 1)[1]))
-        for _, student, url, _ in results:
-            log(f"{student}) {url}")
+        for _, student, _, _ in results:
+            log(f"{student}) ready")
     else:
         log("\n=== NO WORKSHOP VMS WERE PROVISIONED ===")
 

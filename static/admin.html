@@ -21,6 +21,12 @@
    <div class="card">
       <div class="card-header">
          <h2>Pools</h2>
+         <nav id="pool-tabs" class="pool-tabs">
+            <button type="button" class="pool-tab active" data-group="All">All <span class="pool-tab-count"></span></button>
+            <button type="button" class="pool-tab" data-group="Workshop">Workshop <span class="pool-tab-count"></span></button>
+            <button type="button" class="pool-tab" data-group="Challenge">Challenge <span class="pool-tab-count"></span></button>
+            <button type="button" class="pool-tab" data-group="Generic">Generic <span class="pool-tab-count"></span></button>
+         </nav>
          <button type="button" id="new-deploy-btn" class="deploy-btn">New pool</button>
       </div>
       <div class="pool-toolbar">
@@ -68,43 +74,82 @@
    </p>
 
    <dialog id="deploy-dialog">
-      <h2 id="deploy-title">New pool</h2>
       <form id="provision-form">
-         <label for="pool_name">Pool name</label>
-         <input id="pool_name" name="pool_name" type="text" placeholder="Defaults to OS label">
+         <div class="dialog-body">
+            <div class="deploy-head">
+               <h2 id="deploy-title">New pool</h2>
+               <span class="pool-code" id="deploy-code" data-tip="Copy claim code" role="button" tabindex="0" hidden></span>
+            </div>
+            <p class="hint" id="deploy-hint"></p>
 
-         <label for="vm_count">VM count</label>
-         <input id="vm_count" name="vm_count" type="number" min="1" value="5" required>
+            <section class="form-section">
+               <h3>Pool</h3>
+               <label for="pool_name">Pool name</label>
+               <input id="pool_name" name="pool_name" type="text" placeholder="Defaults to OS label">
+               <label>Group</label>
+               <input type="hidden" name="group">
+               <div class="segmented" data-input="group">
+                  <button type="button" class="seg-btn" data-value="Workshop">Workshop</button>
+                  <button type="button" class="seg-btn" data-value="Challenge">Challenge</button>
+                  <button type="button" class="seg-btn" data-value="Generic">Generic</button>
+               </div>
+            </section>
 
-         <label for="vm_duration_hours">VM duration (hours)</label>
-         <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="0.5" value="2" required>
+            <section class="form-section">
+               <h3>Template</h3>
+               <label>Access method</label>
+               <input type="hidden" name="template_vm_access_method">
+               <div class="segmented" data-input="template_vm_access_method">
+                  <button type="button" class="seg-btn" data-value="ssh"><span>SSH</span><span class="seg-sub">Linux</span></button>
+                  <button type="button" class="seg-btn" data-value="vnc"><span>VNC</span><span class="seg-sub">Linux desktop</span></button>
+                  <button type="button" class="seg-btn" data-value="rdp"><span>RDP</span><span class="seg-sub">Windows</span></button>
+               </div>
+               <div class="field-pair">
+                  <div>
+                     <label for="template_vm_id">Template VM ID</label>
+                     <input id="template_vm_id" name="template_vm_id" type="number" required>
+                     <p class="hint">ID of the Proxmox template to clone.</p>
+                  </div>
+                  <div>
+                     <label for="template_vm_username">Template username</label>
+                     <input id="template_vm_username" name="template_vm_username" type="text" required>
+                  </div>
+               </div>
+               <label for="template_vm_password">Template password</label>
+               <input id="template_vm_password" name="template_vm_password" type="password" required>
+            </section>
 
-         <label>
-            <input id="dispenser" type="checkbox" style="width: auto">
-            When no free VMs are available in the pool, clone a new one on demand
-         </label>
-
-         <label>
-            <input id="private" type="checkbox" style="width: auto">
-            Private: hidden from the main page, only claimable with the pool code
-         </label>
-
-         <fieldset>
-            <legend>Template</legend>
-            <label for="template_vm_access_method">Access method</label>
-            <select id="template_vm_access_method" name="template_vm_access_method">
-               <option value="ssh">SSH (Linux)</option>
-               <option value="vnc">VNC (Linux desktop)</option>
-               <option value="rdp">RDP (Windows)</option>
-            </select>
-            <label for="template_vm_id">Template VM ID</label>
-            <input id="template_vm_id" name="template_vm_id" type="number" required>
-            <label for="template_vm_username">Template username</label>
-            <input id="template_vm_username" name="template_vm_username" type="text" required>
-            <label for="template_vm_password">Template password</label>
-            <input id="template_vm_password" name="template_vm_password" type="password" required>
-         </fieldset>
-
+            <section class="form-section">
+               <h3>Claims</h3>
+               <div class="field-pair">
+                  <div>
+                     <label for="vm_count">VM count</label>
+                     <input id="vm_count" name="vm_count" type="number" min="1" value="5" required>
+                  </div>
+                  <div>
+                     <label for="vm_duration_hours">Claim validity (hours)</label>
+                     <input id="vm_duration_hours" name="vm_duration_hours" type="number" min="0.5" step="any" value="2" required>
+                     <p class="hint">Claimed VMs and their links expire after this long.</p>
+                  </div>
+               </div>
+               <label class="switch-row">
+                  <span class="switch-text">
+                     <span class="switch-title">Dispenser</span>
+                     <span class="switch-desc">Clone a new VM when the pool runs empty</span>
+                  </span>
+                  <input id="dispenser" type="checkbox">
+                  <span class="switch"></span>
+               </label>
+               <label class="switch-row">
+                  <span class="switch-text">
+                     <span class="switch-title">Private</span>
+                     <span class="switch-desc">Hidden from the main page; claim only with the pool code</span>
+                  </span>
+                  <input id="private" type="checkbox">
+                  <span class="switch"></span>
+               </label>
+            </section>
+         </div>
          <div class="modal-actions">
             <button type="button" class="secondary" id="deploy-cancel-btn">Cancel</button>
             <button type="submit" id="provision-btn">Provision</button>
