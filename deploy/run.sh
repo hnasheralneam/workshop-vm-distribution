@@ -10,9 +10,7 @@ if [[ ! -x "$GUNICORN" ]]; then
 fi
 
 
-# run with all but one core for all 2+ core processors
-nproc_now="$(nproc)"
-threads=$(( nproc_now > 2 ? nproc_now - 1 : nproc_now ))
+threads="${GUNICORN_THREADS:-32}"
 
 cd "$APP_ROOT"
 exec "$GUNICORN" -w 1 --threads "$threads" -b "0.0.0.0:${PORT:-5000}" server:app

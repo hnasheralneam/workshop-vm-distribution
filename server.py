@@ -15,7 +15,6 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.errors import RateLimitExceeded
 from flask_limiter.util import get_remote_address
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 import applog
 import destroy
@@ -32,7 +31,6 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 MAX_VMS = int(os.getenv("MAX_VMS", "2"))
 
 app = Flask(__name__, static_folder=None)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 limiter = Limiter(app=app, key_func=get_remote_address, default_limits=[])
 ADMIN_LIMIT = "60/minute"
 
@@ -46,12 +44,15 @@ def rate_limited(exc):
     return jsonify(detail="Too many requests. Please wait a minute and try again."), 429
 
 
-def is_expired(entry):
-    return entry.get("expires_at") is not None and time.time() >= entry["expires_at"]
+CLAIM_GRACE_SECONDS = 120
+
+
+def is_expired(entry, grace=0):
+    return entry.get("expires_at") is not None and time.time() + grace >= entry["expires_at"]
 
 
 def is_available(entry):
-    return not entry["claimed"] and not entry.get("reserved") and not is_expired(entry)
+    return not entry["claimed"] and not entry.get("reserved") and not entry.get("destroying") and not is_expired(entry, CLAIM_GRACE_SECONDS)
 
 
 def entry_ref(entry):
@@ -59,9 +60,9 @@ def entry_ref(entry):
 
 
 def identity_match(entry, uid, url):
-    if uid:
-        return entry.get("uid") == uid
-    return bool(url) and url in (entry.get("url"), entry.get("prev_url"))
+    if entry.get("uid"):
+        return isinstance(uid, str) and uid == entry["uid"]
+    return isinstance(url, str) and bool(url) and url in (entry.get("url"), entry.get("prev_url"))
 
 
 def find_entry(entries, uid, url):
@@ -103,7 +104,12 @@ def generate_pool_code(used):
 
 
 def normalize_code(code):
-    return (code or "").strip().upper()
+    return code.strip().upper() if isinstance(code, str) else ""
+
+
+def json_body():
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
 
 
 def unreserve(entries, vmid):
@@ -130,6 +136,11 @@ def finalize_reservation(entries, vmid, url, state, ttl):
             state["expires_at"] = entry["expires_at"]
             state["done"] = True
     return entries
+
+
+def finalize_claim(final_entry, url, state):
+    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
+    return bool(state.get("done"))
 
 
 def mint_or_prune(entry, ttl, pool_predicate, log_prefix):
@@ -273,7 +284,7 @@ def types():
     for code, config in configs.items():
         pools[code] = {"name": config_pool_name(config), "code": None if config.get("private") else code, "available": 0, "dispenser": bool(config.get("dispenser")), "private": bool(config.get("private"))}
     for entry in poolstore.load(POOL_FILE):
-        if not is_available(entry):
+        if not is_available(entry) or entry_ref(entry) not in configs:
             continue
         ref = entry_ref(entry)
         group = pools.setdefault(ref, {"name": ref, "code": None, "available": 0, "dispenser": False, "private": False})
@@ -284,7 +295,7 @@ def types():
 @app.route("/api/claim", methods=["POST"])
 @limiter.limit("10/minute")
 def claim():
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     if body.get("code"):
         config = find_pool_by_code(body.get("code"))
         if config is None:
@@ -292,12 +303,12 @@ def claim():
         return claim_from_pool(config)
 
     configs = load_configs()
-    private_refs = {code for code, cfg in configs.items() if cfg.get("private")}
+    public_refs = {code for code, cfg in configs.items() if not cfg.get("private")}
 
     state = {}
 
     def reserve(entries):
-        available = [entry for entry in entries if is_available(entry) and entry_ref(entry) not in private_refs]
+        available = [entry for entry in entries if is_available(entry) and entry_ref(entry) in public_refs]
         if available:
             entry = random.choice(available)
             entry["reserved"] = True
@@ -311,13 +322,14 @@ def claim():
     entry = state["entry"]
 
     def predicate(e):
-        return is_available(e) and entry_ref(e) not in private_refs
+        return is_available(e) and entry_ref(e) in public_refs
 
     url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
     if url is None:
         return jsonify(detail="VM is not reachable right now. Please contact your instructor."), 502
 
-    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
+    if not finalize_claim(final_entry, url, state):
+        return jsonify(detail="That machine was just reclaimed. Please try again."), 503
     return jsonify(url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
 
 
@@ -330,6 +342,7 @@ def provision_running_for(code):
 def start_ticket():
     ticket = str(uuid.uuid4())
     with ticket_lock:
+        prune_tickets_locked(time.time())
         redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
     return ticket
 
@@ -339,6 +352,7 @@ def run_claim_wait(ticket, config):
     state = {}
     try:
         while True:
+            running = provision_running_for(code)
             state = {}
 
             def reserve(entries):
@@ -357,11 +371,10 @@ def run_claim_wait(ticket, config):
                     return is_available(e) and entry_ref(e) == code
 
                 url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
-                if url is not None:
-                    poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
+                if url is not None and finalize_claim(final_entry, url, state):
                     set_ticket(ticket, status="ready", url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
                     return
-            if not provision_running_for(code):
+            if not running:
                 break
             time.sleep(3)
 
@@ -400,7 +413,8 @@ def claim_from_pool(config):
         url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
         if url is None:
             return jsonify(detail="VM is not reachable right now. Please try again."), 502
-        poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], url, state, entry_ttl(final_entry)))
+        if not finalize_claim(final_entry, url, state):
+            return jsonify(detail="That machine was just reclaimed. Please try again."), 503
         return jsonify(status="ready", url=url, pool=pool_name, expires_at=state.get("expires_at"), uid=state.get("uid"))
 
     if provision_running_for(code):
@@ -418,12 +432,12 @@ def claim_from_pool(config):
 @app.route("/api/validate", methods=["POST"])
 @limiter.limit("30/minute")
 def validate():
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     uid = body.get("uid")
     url = body.get("url", "")
     entries = poolstore.load(POOL_FILE)
     entry = find_entry(entries, uid, url)
-    if entry is None:
+    if entry is None or entry.get("released"):
         return jsonify(valid=False)
     if not entry.get("claimed"):
         return jsonify(valid=False, expired=is_expired(entry))
@@ -441,7 +455,7 @@ def validate():
     state = {}
 
     def replace_expired(current):
-        expired = next((e for e in current if identity_match(e, uid, url) and e.get("claimed")), None)
+        expired = next((e for e in current if identity_match(e, uid, url) and e.get("claimed") and not e.get("released")), None)
         if expired is None:
             state["gone"] = True
             return current
@@ -480,7 +494,7 @@ def validate():
 @limiter.limit("10/minute")
 def reconnect():
     """Stored ?token= URLs idle out (~60min), so re-mint a fresh session with the VM's current IP."""
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     uid = body.get("uid")
     url = body.get("url", "")
     entry = find_entry(poolstore.load(POOL_FILE), uid, url)
@@ -520,7 +534,7 @@ def reconnect():
 @app.route("/api/release", methods=["POST"])
 @limiter.limit("10/minute")
 def release():
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     uid = body.get("uid")
     url = body.get("url", "")
     state = {}
@@ -529,6 +543,7 @@ def release():
         for entry in entries:
             if identity_match(entry, uid, url) and entry.get("claimed"):
                 entry["expires_at"] = time.time()
+                entry["released"] = True
                 state["entry"] = entry
         return entries
 
@@ -552,11 +567,13 @@ def release():
 
 
 redeem_tickets = {}
+ticket_drop_at = {}
 
 
-def drop_ticket(ticket):
-    with ticket_lock:
+def prune_tickets_locked(now):
+    for ticket in [t for t, at in ticket_drop_at.items() if at <= now]:
         redeem_tickets.pop(ticket, None)
+        ticket_drop_at.pop(ticket, None)
 
 
 def set_ticket(ticket, **fields):
@@ -566,7 +583,7 @@ def set_ticket(ticket, **fields):
             status = fields.get("status")
             if status in ("ready", "error"):
                 retention = 86400 if status == "ready" else 600
-                threading.Timer(retention, drop_ticket, args=(ticket,)).start()
+                ticket_drop_at[ticket] = time.time() + retention
 
 
 def find_pool_by_code(code):
@@ -623,7 +640,7 @@ def run_redeem_provision(ticket, config):
 @app.route("/api/redeem", methods=["POST"])
 @limiter.limit("10/minute")
 def redeem():
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     config = find_pool_by_code(body.get("code"))
     if config is None:
         return jsonify(detail="Unknown code."), 404
@@ -634,6 +651,7 @@ def redeem():
 @limiter.limit("60/minute")
 def redeem_status(ticket):
     with ticket_lock:
+        prune_tickets_locked(time.time())
         snapshot = dict(redeem_tickets[ticket]) if ticket in redeem_tickets else None
     if snapshot is None:
         return jsonify(detail="Unknown ticket."), 404
@@ -646,7 +664,8 @@ def admin_required(f):
         if not ADMIN_PASSWORD:
             return jsonify(detail="ADMIN_PASSWORD is not set on the server."), 503
         auth = request.authorization
-        if not auth or not hmac.compare_digest(auth.password, ADMIN_PASSWORD):
+        password = (auth.password or "") if auth else ""
+        if not auth or not hmac.compare_digest(password.encode(), ADMIN_PASSWORD.encode()):
             return jsonify(detail="Authentication required."), 401, {
                 "WWW-Authenticate": 'Basic realm="Admin"'
             }
@@ -725,7 +744,7 @@ def admin_pool():
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
 def admin_provision():
-    body = request.get_json(silent=True) or {}
+    body = {k: v for k, v in json_body().items() if k not in provision.GLOBAL_FIELDS}
     try:
         config = provision.build_config(body)
         provision.require_template_fields(config)
@@ -743,6 +762,7 @@ def admin_provision():
 
     job = start_job("provision", provision.run_parallel_provisioning, config, count, pool_code=normalize_code(config.get("pool_code")))
     if job is None:
+        poolstore.update(CONFIGS_FILE, lambda cs: {k: v for k, v in cs.items() if k != config["pool_code"]}, dict)
         return jsonify(detail="A provision job is already running."), 409
     return jsonify(job_id=job["id"])
 
@@ -791,12 +811,12 @@ def admin_pools():
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
 def admin_update_pool(code):
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     saved = load_configs().get(code)
     if saved is None:
         return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
 
-    overrides = {k: v for k, v in body.items() if k != "pool_code" and v not in (None, "")}
+    overrides = {k: v for k, v in body.items() if k != "pool_code" and k not in provision.GLOBAL_FIELDS and v not in (None, "")}
     try:
         config = provision.build_config({**saved, **overrides})
         provision.require_template_fields(config)
@@ -843,9 +863,9 @@ def admin_delete_pool(code):
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
 def admin_redeploy():
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     code = body.get("code")
-    config = load_configs().get(code)
+    config = load_configs().get(code) if isinstance(code, str) else None
     if config is None:
         return jsonify(detail=f"No saved configuration for pool {code!r}."), 404
 
@@ -886,7 +906,7 @@ def admin_redeploy():
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
 def admin_destroy():
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     mode = body.get("mode")
     if mode not in ("all", "specific"):
         return jsonify(detail="mode must be 'all' or 'specific'."), 400
@@ -906,7 +926,7 @@ def admin_destroy():
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
 def admin_extend():
-    body = request.get_json(silent=True) or {}
+    body = json_body()
     hours = body.get("hours")
     if not isinstance(hours, int) or isinstance(hours, bool):
         return jsonify(detail="hours must be an integer."), 400
@@ -917,14 +937,14 @@ def admin_extend():
 
     def extend(entries):
         for entry in entries:
-            if entry["vmid"] == vmid:
+            if entry["vmid"] == vmid and not entry.get("destroying"):
                 entry["expires_at"] = max(entry.get("expires_at") or 0, time.time()) + hours * 3600
                 state["entry"] = entry
         return entries
 
     poolstore.update(POOL_FILE, extend)
     if "entry" not in state:
-        return jsonify(detail=f"No VM with vmid {vmid!r}."), 404
+        return jsonify(detail=f"No VM with vmid {vmid!r}, or it is being destroyed."), 404
     return jsonify(vmid=vmid, expires_at=state["entry"]["expires_at"])
 
 
@@ -997,7 +1017,7 @@ def ensure_uids(entries):
 
 def startup():
     configs = poolstore.update(CONFIGS_FILE, normalize_configs, dict)
-    poolstore.update(POOL_FILE, lambda entries: ensure_uids(migrate_pool_entries([{k: v for k, v in e.items() if k != "reserved"} for e in entries], configs)))
+    poolstore.update(POOL_FILE, lambda entries: ensure_uids(migrate_pool_entries([{k: v for k, v in e.items() if k not in ("reserved", "destroying")} for e in entries], configs)))
     applog.log.info(f"Loaded {len(poolstore.load(POOL_FILE))} VM(s) from {POOL_FILE}")
     if REAP_INTERVAL_SECONDS > 0:
         threading.Thread(target=reap_expired_vms, daemon=True).start()

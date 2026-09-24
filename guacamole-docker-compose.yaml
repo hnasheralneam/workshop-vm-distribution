@@ -6,30 +6,11 @@ services:
       - guac_network
     restart: always
 
-  postgres:
-    image: postgres:15
-    container_name: guac_postgres
-    environment:
-      POSTGRES_DB: __GUAC_DB_NAME__
-      POSTGRES_USER: __GUAC_DB_USER__
-      POSTGRES_PASSWORD: __GUAC_DB_PASS__
-    networks:
-      - guac_network
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      # Automatically initialize the schema on the first boot
-      - ./initdb.sql:/docker-entrypoint-initdb.d/initdb.sql
-    restart: always
-
   guacamole:
     image: guacamole/guacamole:1.6.0
     container_name: guacamole
     environment:
       GUACD_HOSTNAME: guacd
-      POSTGRESQL_HOSTNAME: postgres
-      POSTGRESQL_DATABASE: __GUAC_DB_NAME__
-      POSTGRESQL_USER: __GUAC_DB_USER__
-      POSTGRESQL_PASSWORD: __GUAC_DB_PASS__
 
       # Must be exactly 32 hex characters (128-bit)
       JSON_SECRET_KEY: '__GUAC_JSON_KEY__'
@@ -41,12 +22,8 @@ services:
       - ./guacamole_home:/etc/guacamole
     depends_on:
       - guacd
-      - postgres
     restart: always
 
 networks:
   guac_network:
     driver: bridge
-
-volumes:
-  postgres_data:

@@ -84,8 +84,18 @@ def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
         target_vms = [vm for vm in target_vms if vm.get('vmid') in wanted]
     elif mode == "expired":
         now = time.time()
-        expired_vmids = {entry['vmid'] for entry in pool if entry.get('expires_at') is not None and entry['expires_at'] < now}
-        target_vms = [vm for vm in target_vms if vm.get('vmid') in expired_vmids]
+        live_vmids = {vm['vmid'] for vm in target_vms}
+        picked = set()
+
+        def mark(entries):
+            for entry in entries:
+                if entry.get('vmid') in live_vmids and not entry.get('reserved') and entry.get('expires_at') is not None and entry['expires_at'] < now:
+                    entry['destroying'] = True
+                    picked.add(entry['vmid'])
+            return entries
+
+        poolstore.update(pool_output_file, mark)
+        target_vms = [vm for vm in target_vms if vm.get('vmid') in picked]
     else:
         tracked_vmids = {entry['vmid'] for entry in pool}
         target_vms = [vm for vm in target_vms if vm.get('vmid') in tracked_vmids]
@@ -119,7 +129,7 @@ def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
     if pool_output_file:
         remaining_pool = poolstore.update(
             pool_output_file,
-            lambda entries: [entry for entry in entries if entry.get('vmid') not in destroyed_vmids])
+            lambda entries: [{k: v for k, v in entry.items() if k != 'destroying'} for entry in entries if entry.get('vmid') not in destroyed_vmids])
         log(f"\nUpdated pool file: {pool_output_file} ({len(remaining_pool)} entries remaining)")
 
     return results

@@ -6,8 +6,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=workshop-vm
+Group=workshop-vm
 WorkingDirectory=__APP_ROOT__
 ExecStart=__APP_ROOT__/deploy/run.sh
 Environment=PORT=__PORT__

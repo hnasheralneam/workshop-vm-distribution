@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Provision guacamole 1.6.0 through Docker, sets up its json extension, then sets up and starts workshop-vm as a systemd service.
 # Run with sudo
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -11,14 +12,9 @@ APP_DIR="${APP_DIR:-/opt/workshop-vm}"
 GUAC_STACK_DIR="${GUAC_STACK_DIR:-${APP_DIR}/guacamole_stack}"
 REPO_CLONE_URL="${REPO_CLONE_URL:-https://github.com/hnasheralneam/workshop-vm-distribution.git}"
 
-# Version tag for the Guacamole stack + initdb generation
+# Version tag for the Guacamole stack
 GUAC_IMAGE_TAG="${GUAC_IMAGE_TAG:-guacamole/guacamole:1.6.0}"
 GUAC_GUACD_TAG="${GUAC_GUACD_TAG:-guacamole/guacd:1.6.0}"
-
-# Guacamole Postgres
-GUAC_DB_NAME="${GUAC_DB_NAME:-guacamole_db}"
-GUAC_DB_USER="${GUAC_DB_USER:-guacamole_user}"
-GUAC_DB_PASS="${GUAC_DB_PASS:-WorkshopDBPass123!}"
 
 # random secret key
 GUAC_JSON_KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-32)"
@@ -47,7 +43,8 @@ mkdir -p "$APP_DIR" "$GUAC_STACK_DIR"
 log() { echo "==> $*"; }
 
 ask_var() {
-  local name="$1" label="$2" secret="${3:-}" input="" prompt="$label"
+  local name="$1" label="$2" secret="${3:-}" input=""
+  local prompt="$label"
   [[ -t 0 ]] || return 0
   if [[ -n "$secret" ]]; then
     read -rs -p "$prompt: " input; echo
@@ -55,7 +52,7 @@ ask_var() {
     [[ -n "${!name:-}" ]] && prompt="$label [${!name}]"
     read -r -p "$prompt: " input
   fi
-  [[ -n "$input" ]] && printf -v "$name" '%s' "$input"
+  if [[ -n "$input" ]]; then printf -v "$name" '%s' "$input"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -73,22 +70,15 @@ module_system_pkgs() {
 }
 
 # ---------------------------------------------------------------------------
-# 02 · Guacamole compose stack (guacd + postgres + guacamole) + JSON auth
+# 02 · Guacamole compose stack (guacd + guacamole) + JSON auth
 # ---------------------------------------------------------------------------
 module_guac_compose() {
-  local initdb_dst="$GUAC_STACK_DIR/initdb.sql"
-  # Generate the Postgres schema
-  docker run --rm "$GUAC_IMAGE_TAG" /opt/guacamole/bin/initdb.sh --postgresql \
-    > "$initdb_dst"
-  [[ -s "$initdb_dst" ]] || { echo "initdb.sql generation failed" >&2; return 1; }
   mkdir -p "$GUAC_STACK_DIR/guacamole_home/extensions"
+  chmod 755 "$GUAC_STACK_DIR/guacamole_home" "$GUAC_STACK_DIR/guacamole_home/extensions"
 
   # The stock guacamole:1.6.0 image auto-links guacamole-auth-json.jar into
   # the runtime home when JSON_SECRET_KEY is set
-  sed -e "s|__GUAC_DB_NAME__|${GUAC_DB_NAME}|g" \
-      -e "s|__GUAC_DB_USER__|${GUAC_DB_USER}|g" \
-      -e "s|__GUAC_DB_PASS__|${GUAC_DB_PASS}|g" \
-      -e "s|__GUAC_JSON_KEY__|${GUAC_JSON_KEY}|g" \
+  sed -e "s|__GUAC_JSON_KEY__|${GUAC_JSON_KEY}|g" \
       "$SCRIPT_DIR/../guacamole-docker-compose.yaml" > "$GUAC_STACK_DIR/compose.yaml"
 }
 
@@ -97,8 +87,8 @@ module_guac_up() {
   docker compose up -d --remove-orphans
   local i ok=""
   for i in $(seq 1 30); do
-    if docker compose ps 2>/dev/null | grep -q guacamole && \
-       docker logs guacamole 2>/dev/null | grep -q "Encrypted JSON Authentication"; then
+    if docker compose ps 2>/dev/null | grep guacamole >/dev/null && \
+       docker logs guacamole 2>/dev/null | grep "Encrypted JSON Authentication" >/dev/null; then
       ok=1; break
     fi
     sleep 3
@@ -111,7 +101,7 @@ module_guac_up() {
 # 03 · workshop-vm-distribution app (clone, venv, dependencies)
 # ---------------------------------------------------------------------------
 module_app_clone() {
-  git clone --depth 1 "$REPO_CLONE_URL" "$APP_DIR/workshop-vm-distribution"
+  [[ -d "$APP_DIR/workshop-vm-distribution/.git" ]] || git clone --depth 1 "$REPO_CLONE_URL" "$APP_DIR/workshop-vm-distribution"
 }
 
 module_app_venv() {
@@ -139,7 +129,6 @@ write_env() {
     echo "GUACAMOLE_INTERNAL_URL=\"$INTERNAL_GUAC_URL\""
     echo "GUACAMOLE_KEY=\"$GUAC_JSON_KEY\""
     echo
-    echo "URL_OUTPUT_FILE=\"pool.json\""
     echo "PORT=$PORT"
     echo "LOG_FILE=\"server.log\""
     if [[ -n "$ADMIN_PASSWORD" ]]; then echo "ADMIN_PASSWORD=\"$ADMIN_PASSWORD\""; fi
@@ -156,12 +145,17 @@ module_env() {
 # ---------------------------------------------------------------------------
 module_systemd() {
   local app_root="$APP_DIR/workshop-vm-distribution"
+  id -u workshop-vm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin workshop-vm
+  chown -R workshop-vm:workshop-vm "$app_root"
+  chmod 755 "$APP_DIR"
   sed -e "s|__APP_ROOT__|$app_root|g" -e "s|__PORT__|$PORT|g" \
     "$SCRIPT_DIR/workshop-vm.service" > /etc/systemd/system/workshop-vm.service
   chmod 644 /etc/systemd/system/workshop-vm.service
   systemctl daemon-reload
   systemctl enable workshop-vm
   systemctl restart workshop-vm
+  sleep 5
+  systemctl is-active --quiet workshop-vm || { journalctl -u workshop-vm -n 20 --no-pager >&2; echo "workshop-vm failed to start" >&2; return 1; }
   log "portal: http://$HOSTNAME:$PORT  admin: /admin"
 }
 
@@ -190,7 +184,7 @@ module_env
 module_systemd
 
 log "Deployment complete."
-log "  Portal on :${PORT:-5000} (students) + :8080 guac gui (guacamole/guacamole)"
+log "  Portal on :${PORT:-5000} (students) + :8080 guacamole (JSON auth only, no login accounts)"
 log "  .env: $APP_DIR/workshop-vm-distribution/.env"
 echo "GUAC_JSON_KEY_HINT=$GUAC_JSON_KEY"
 if [[ -n "${ADMIN_PASSWORD_GENERATED:-}" ]]; then

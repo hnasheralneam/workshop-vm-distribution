@@ -234,6 +234,7 @@ async function validateVm(vm) {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ url: vm.url, uid: vm.uid })
 		});
+		if (!response.ok) return;
 		const data = await response.json();
 		if (data.valid) {
 			updateVm(vm, { uid: data.uid, url: data.url, expires_at: data.expires_at ?? undefined });
@@ -625,9 +626,11 @@ function pollTicket(ticket, pool, sink) {
 		} else {
 			try {
 				const response = await fetch(`/api/redeem/${ticket}`);
-				data = await response.json();
-				if (!response.ok || data.status === "error") {
-					failed = data.detail || "Provisioning failed. Please try again.";
+				if (response.ok) {
+					data = await response.json();
+					if (data.status === "error") failed = data.detail || "Provisioning failed. Please try again.";
+				} else if (response.status === 404) {
+					failed = "This request expired. Please try again.";
 				}
 			} catch (error) {}
 		}

@@ -47,6 +47,12 @@ class VMNotFoundError(RuntimeError):
     pass
 
 
+class CloneError(RuntimeError):
+    def __init__(self, vmid, exc):
+        super().__init__(str(exc))
+        self.vmid = vmid
+
+
 def _looks_like_missing_vm(exc):
     status = getattr(exc, "status_code", None)
     text = str(exc).lower()
@@ -58,9 +64,6 @@ RECONNECT_IP_TIMEOUT = 30
 
 
 def default_config():
-    url_output_file = os.getenv("URL_OUTPUT_FILE", "pool.json")
-    if not os.path.isabs(url_output_file):
-        url_output_file = str(Path(__file__).parent / url_output_file)
     return {
         "proxmox_url": os.getenv("PROXMOX_URL"),
         "proxmox_user": os.getenv("PROXMOX_USER"),
@@ -75,7 +78,7 @@ def default_config():
         "guacamole_internal_url": os.getenv("GUACAMOLE_INTERNAL_URL") or os.getenv("GUACAMOLE_URL"),
         "guacamole_key": os.getenv("GUACAMOLE_KEY"),
         "guac_link_ttl_seconds": None,
-        "url_output_file": url_output_file,
+        "url_output_file": str(Path(__file__).parent / "pool.json"),
         "vm_count": None,
         "pool_name": "",
         "pool_code": "",
@@ -260,7 +263,7 @@ def allocate_vmid(proxmox, node):
     global last_allocated_vmid
     with vmid_lock:
         vmid = max(int(proxmox.cluster.nextid.get()), last_allocated_vmid + 1)
-        used = {vm["vmid"] for vm in node.qemu.get()}
+        used = {vm["vmid"] for vm in proxmox.cluster.resources.get(type="vm")}
         while vmid in used:
             vmid += 1
         last_allocated_vmid = vmid
@@ -277,7 +280,7 @@ def clone_template(proxmox, config, student_id, log):
             return vmid, upid
         except Exception as exc:
             if attempt == 2 or "already exists" not in str(exc).lower():
-                raise
+                raise CloneError(vmid, exc) from exc
 
 
 def provision_worker(proxmox, config, student_id, log):
@@ -302,6 +305,16 @@ def provision_worker(proxmox, config, student_id, log):
         guac_url, expires_at = generate_guac_url(config, vm_ip, student_id)
         return vmid, student_id, guac_url, expires_at
     except Exception as exc:
+        if vmid is None and isinstance(exc, CloneError):
+            vmid = exc.vmid
+            deadline = time.time() + 900
+            while time.time() < deadline:
+                try:
+                    if not node.qemu(vmid).config.get().get("lock"):
+                        break
+                except Exception:
+                    break
+                time.sleep(5)
         log(f"[{vmid}] Provision failed: {exc}. Cleaning up VM...")
         if upid:
             try:

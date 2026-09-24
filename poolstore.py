@@ -24,6 +24,7 @@ def update(path, fn, factory=list):
                     os.fchmod(f.fileno(), 0o600)
                     json.dump(data, f, indent=2)
                     f.flush()
+                    os.fsync(f.fileno())
                 os.replace(tmp, str(path))
             except BaseException:
                 try:
