@@ -219,6 +219,12 @@ function renderVms() {
 		releaseBtn.onclick = () => releaseVm(vm, row);
 		actions.append(reconnectBtn, releaseBtn);
 		row.append(label, actions);
+		if (vm.stale) {
+			const hint = document.createElement("span");
+			hint.className = "vm-stale";
+			hint.innerText = "Connection service unreachable, try Reconnect";
+			row.appendChild(hint);
+		}
 		vmsContainer.appendChild(row);
 	}
 }
@@ -237,7 +243,11 @@ async function validateVm(vm) {
 		if (!response.ok) return;
 		const data = await response.json();
 		if (data.valid) {
-			updateVm(vm, { uid: data.uid, url: data.url, expires_at: data.expires_at ?? undefined });
+			updateVm(vm, { uid: data.uid, url: data.url, expires_at: data.expires_at ?? undefined, stale: null });
+			if (data.stale) {
+				updateVm(vm, { stale: true });
+				setStatus("The connection service is unreachable right now. Try Reconnect in a moment.");
+			}
 			return;
 		}
 		if (data.url) {
@@ -262,7 +272,7 @@ async function reconnectVm(vm, row) {
 		});
 		const data = await response.json();
 		if (response.ok && data.url) {
-			updateVm(vm, { url: data.url, uid: data.uid, expires_at: data.expires_at });
+			updateVm(vm, { url: data.url, uid: data.uid, expires_at: data.expires_at, stale: null });
 			setStatus("Redirecting...");
 			window.location.href = data.url;
 		} else if (data.expired) {
@@ -366,7 +376,10 @@ async function handleTerminalAccess(pool, btn) {
 		});
 		const data = await response.json();
 
-		if (data.status === "provisioning") {
+		if (data.status === "provisioning" && data.stage === "connecting") {
+			setStatus(stageText(data.stage));
+			pollTicket(data.ticket, data.pool, backgroundSink);
+		} else if (data.status === "provisioning") {
 			provisionStart(data.ticket, data.pool);
 			pollTicket(data.ticket, data.pool, modalSink(data.ticket));
 		} else if (response.ok) {
@@ -405,6 +418,9 @@ async function claimByCode(code) {
 			addVm(data.url, data.pool, data.expires_at, data.uid);
 			setStatus("VM claimed! Redirecting...", "success");
 			window.location.replace(data.url);
+		} else if (response.ok && data.status === "provisioning" && data.stage === "connecting") {
+			setStatus(stageText(data.stage));
+			pollTicket(data.ticket, data.pool, backgroundSink);
 		} else if (response.ok && data.status === "provisioning") {
 			provisionStart(data.ticket, data.pool);
 			pollTicket(data.ticket, data.pool, modalSink(data.ticket));
@@ -419,6 +435,7 @@ async function claimByCode(code) {
 }
 
 function stageText(stage) {
+	if (stage === "connecting") return "Restoring connection to your machine...";
 	if (stage === "cloning") return "Cloning template...";
 	if (stage === "booting") return "Booting VM...";
 	if (stage === "network") return "Waiting for network...";
@@ -686,6 +703,10 @@ async function redeemCode() {
 		if (response.ok && data.status === "ready") {
 			addVm(data.url, data.pool, data.expires_at, data.uid);
 			window.location.href = data.url;
+		} else if (response.ok && data.status === "provisioning" && data.stage === "connecting") {
+			codeDialog.close();
+			setStatus(stageText(data.stage));
+			pollTicket(data.ticket, data.pool, backgroundSink);
 		} else if (response.ok && data.status === "provisioning") {
 			codeDialog.close();
 			provisionStart(data.ticket, data.pool);

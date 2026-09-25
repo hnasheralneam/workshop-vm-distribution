@@ -198,15 +198,25 @@ def generate_guac_url(config, target_ip, student_id):
     base64_encrypted = base64.b64encode(encrypted_data).decode('utf-8')
 
     api_url = config.get("guacamole_internal_url") or config["guacamole_url"]
-    response = requests.post(
-        f"{api_url}/api/tokens",
-        data={"data": base64_encrypted},
-        timeout=15
-    )
-
-    if response.status_code == 200:
-        return f"{config['guacamole_url']}/?token={response.json().get('authToken')}", expires_at
-    raise RuntimeError(f"Guacamole token request failed: {response.status_code} {response.text}")
+    last_error = "unknown error"
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                f"{api_url}/api/tokens",
+                data={"data": base64_encrypted},
+                timeout=15
+            )
+        except requests.RequestException as exc:
+            last_error = str(exc)
+        else:
+            if response.status_code == 200:
+                return f"{config['guacamole_url']}/?token={response.json().get('authToken')}", expires_at
+            last_error = f"{response.status_code} {response.text}"
+            if response.status_code < 500:
+                break
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"Guacamole token request failed: {last_error}")
 
 
 def get_vm_ip(proxmox, config, vmid, timeout=120):

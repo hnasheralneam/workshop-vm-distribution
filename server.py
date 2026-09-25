@@ -145,11 +145,12 @@ def finalize_claim(final_entry, url, state):
 
 def mint_or_prune(entry, ttl, pool_predicate, log_prefix):
     """Mint a session URL for entry. If its VM was removed externally, prune
-    it from pool.json and retry once against another matching entry."""
+    it from pool.json and retry once against another matching entry. Any other
+    failure keeps the reservation and is reported as transient."""
     current = entry
     for _ in range(2):
         try:
-            return provision.mint_session_url(current, ttl), current
+            return provision.mint_session_url(current, ttl), current, False
         except provision.VMNotFoundError:
             applog.log.info(
                 f"{log_prefix}: VM {current['vmid']} not found on Proxmox "
@@ -168,14 +169,12 @@ def mint_or_prune(entry, ttl, pool_predicate, log_prefix):
 
             poolstore.update(POOL_FILE, prune_and_pick)
             if "next" not in state:
-                return None, None
+                return None, None, False
             current = state["next"]
         except Exception as exc:
             applog.log.info(f"{log_prefix}: mint failed for VM {current['vmid']}: {exc}")
-            poolstore.update(POOL_FILE, lambda es: unreserve(es, current["vmid"]))
-            return None, None
-    poolstore.update(POOL_FILE, lambda es: unreserve(es, current["vmid"]))
-    return None, None
+            return None, current, True
+    return None, current, True
 
 
 def prune_removed(prefix, entry):
@@ -324,8 +323,12 @@ def claim():
     def predicate(e):
         return is_available(e) and entry_ref(e) in public_refs
 
-    url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
+    url, final_entry, transient = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
     if url is None:
+        if transient:
+            ticket = start_ticket(stage="connecting")
+            threading.Thread(target=run_mint_retry, args=(ticket, final_entry, predicate, "Claim"), daemon=True).start()
+            return jsonify(status="provisioning", stage="connecting", ticket=ticket), 202
         return jsonify(detail="VM is not reachable right now. Please contact your instructor."), 502
 
     if not finalize_claim(final_entry, url, state):
@@ -339,11 +342,11 @@ def provision_running_for(code):
         return bool(job and job["status"] == "running" and job.get("pool_code") == code)
 
 
-def start_ticket():
+def start_ticket(stage="cloning"):
     ticket = str(uuid.uuid4())
     with ticket_lock:
         prune_tickets_locked(time.time())
-        redeem_tickets[ticket] = {"status": "provisioning", "stage": "cloning"}
+        redeem_tickets[ticket] = {"status": "provisioning", "stage": stage}
     return ticket
 
 
@@ -370,10 +373,12 @@ def run_claim_wait(ticket, config):
                 def predicate(e):
                     return is_available(e) and entry_ref(e) == code
 
-                url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
+                url, final_entry, transient = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
                 if url is not None and finalize_claim(final_entry, url, state):
                     set_ticket(ticket, status="ready", url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
                     return
+                if transient and final_entry is not None:
+                    poolstore.update(POOL_FILE, lambda es: unreserve(es, final_entry["vmid"]))
             if not running:
                 break
             time.sleep(3)
@@ -388,6 +393,46 @@ def run_claim_wait(ticket, config):
             entry_vmid = state["entry"]["vmid"]
             poolstore.update(POOL_FILE, lambda es: unreserve(es, entry_vmid))
         set_ticket(ticket, status="error", detail="Provisioning failed. Please try again.")
+
+
+MINT_RETRY_SECONDS = 600
+
+
+def run_mint_retry(ticket, entry, pool_predicate, log_prefix):
+    """Retry minting for a reserved entry in the background after a transient
+    failure. Gives up after MINT_RETRY_SECONDS and releases the reservation."""
+    vmid = entry["vmid"]
+    detail = "VM is not reachable right now. Please contact your instructor."
+    try:
+        deadline = time.time() + MINT_RETRY_SECONDS
+        while time.time() < deadline:
+            time.sleep(20)
+            current = next((e for e in poolstore.load(POOL_FILE) if e["vmid"] == vmid), None)
+            if current is None:
+                set_ticket(ticket, status="error", detail=detail)
+                return
+            try:
+                url = provision.mint_session_url(current, entry_ttl(current))
+            except provision.VMNotFoundError:
+                prune_removed(log_prefix, current)
+                set_ticket(ticket, status="error", detail=detail)
+                return
+            except Exception as exc:
+                applog.log.info(f"{log_prefix}: mint retry for VM {vmid}: {exc}")
+                continue
+            state = {}
+            poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, vmid, url, state, entry_ttl(current)))
+            if state.get("done"):
+                set_ticket(ticket, status="ready", url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
+                return
+            set_ticket(ticket, status="error", detail=detail)
+            return
+        poolstore.update(POOL_FILE, lambda es: unreserve(es, vmid))
+        set_ticket(ticket, status="error", detail=detail)
+    except Exception as exc:
+        applog.log.info(f"{log_prefix}: mint retry failed for VM {vmid}: {exc}")
+        poolstore.update(POOL_FILE, lambda es: unreserve(es, vmid))
+        set_ticket(ticket, status="error", detail=detail)
 
 
 def claim_from_pool(config):
@@ -410,8 +455,12 @@ def claim_from_pool(config):
         def predicate(e):
             return is_available(e) and entry_ref(e) == code
 
-        url, final_entry = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
+        url, final_entry, transient = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
         if url is None:
+            if transient:
+                ticket = start_ticket(stage="connecting")
+                threading.Thread(target=run_mint_retry, args=(ticket, final_entry, predicate, "Claim"), daemon=True).start()
+                return jsonify(status="provisioning", stage="connecting", ticket=ticket, pool=pool_name), 202
             return jsonify(detail="VM is not reachable right now. Please try again."), 502
         if not finalize_claim(final_entry, url, state):
             return jsonify(detail="That machine was just reclaimed. Please try again."), 503
@@ -449,7 +498,7 @@ def validate():
             return jsonify(valid=False)
         except Exception as exc:
             applog.log.info(f"Validate: mint failed for VM {entry['vmid']}: {exc}")
-            return jsonify(valid=True, uid=entry.get("uid"), expires_at=entry.get("expires_at"))
+            return jsonify(valid=True, stale=True, uid=entry.get("uid"), expires_at=entry.get("expires_at"))
         return jsonify(valid=True, url=fresh, uid=entry.get("uid"), expires_at=entry.get("expires_at"))
 
     state = {}
@@ -480,8 +529,10 @@ def validate():
     def predicate(e):
         return is_available(e) and entry_ref(e) == ref
 
-    fresh, final_entry = mint_or_prune(replacement, entry_ttl(replacement), predicate, "Validate")
+    fresh, final_entry, transient = mint_or_prune(replacement, entry_ttl(replacement), predicate, "Validate")
     if fresh is None:
+        if transient and final_entry is not None:
+            poolstore.update(POOL_FILE, lambda es: unreserve(es, final_entry["vmid"]))
         return jsonify(valid=False, expired=True, detail="Could not prepare a replacement machine. Please try again.")
 
     poolstore.update(POOL_FILE, lambda es: finalize_reservation(es, final_entry["vmid"], fresh, state, entry_ttl(final_entry)))

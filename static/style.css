@@ -1018,6 +1018,15 @@ body.portal .vm-actions button.danger {
 	background: var(--danger);
 }
 
+body.portal .vm-stale {
+	flex-shrink: 0;
+	font-size: 0.72rem;
+	color: #d97706;
+	white-space: normal;
+	text-align: right;
+	max-width: 40%;
+}
+
 body.portal #status-message {
 	display: none;
 	margin-top: 1rem;
