@@ -64,7 +64,11 @@ VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 RECONNECT_IP_TIMEOUT = 30
 
-IP_TIMEOUTS = {"ssh": 120, "vnc": 180, "rdp": 420}
+IP_TIMEOUTS = {"ssh": 120, "vnc": 180, "rdp": 600}
+
+PORT_TIMEOUTS = {"ssh": 300, "vnc": 300, "rdp": 600}
+
+RECLAIM_IP_TIMEOUT_CAP = 180
 
 
 def default_config():
@@ -228,8 +232,8 @@ def get_vm_ip(proxmox, config, vmid, timeout=120):
     raise TimeoutError(f"VM {vmid} did not obtain a valid IP within {timeout} seconds")
 
 
-def wait_for_port(ip, port):
-    deadline = time.time() + 300
+def wait_for_port(ip, port, timeout=300):
+    deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             with socket.create_connection((ip, port), timeout=2):
@@ -241,7 +245,7 @@ def wait_for_port(ip, port):
             return True
         except (ConnectionRefusedError, socket.timeout, OSError):
             time.sleep(3)
-    raise TimeoutError(f"Port {port} on {ip} did not open within 300 seconds")
+    raise TimeoutError(f"Port {port} on {ip} did not open within {timeout} seconds")
 
 
 def wait_for_task(node, upid, timeout=900):
@@ -320,7 +324,7 @@ def provision_worker(proxmox, config, student_id, log):
         vm_ip = get_vm_ip(proxmox, config, vmid, timeout=IP_TIMEOUTS.get(access_method, 120))
 
         log(f"[{vmid}] Waiting for {access_method}...")
-        wait_for_port(vm_ip, int(get_port(access_method)))
+        wait_for_port(vm_ip, int(get_port(access_method)), timeout=PORT_TIMEOUTS.get(access_method, 300))
 
         guac_url, expires_at = generate_guac_url(config, vm_ip, student_id)
         return vmid, student_id, guac_url, expires_at
@@ -484,7 +488,8 @@ def mint_session_url(entry, guac_link_ttl_seconds, log=applog.log.info):
         raise RuntimeError(f"VM {vmid} status check failed: {exc}") from exc
     if status.get("status") != "running":
         raise RuntimeError(f"VM {vmid} is not running (status={status.get('status')})")
-    vm_ip = get_vm_ip(proxmox, config, vmid, timeout=RECONNECT_IP_TIMEOUT)
+    ip_timeout = min(IP_TIMEOUTS.get(config["template_vm_access_method"], RECONNECT_IP_TIMEOUT), RECLAIM_IP_TIMEOUT_CAP)
+    vm_ip = get_vm_ip(proxmox, config, vmid, timeout=ip_timeout)
     url, _ = generate_guac_url(config, vm_ip, entry.get("student_id") or f"vm-{vmid}")
     log(f"[{vmid}] Minted fresh session URL (ip={vm_ip})")
     return url
