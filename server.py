@@ -739,6 +739,14 @@ def admin_pool():
     return jsonify(entries)
 
 
+def template_check_error(config):
+    try:
+        provision.ensure_template(provision.get_proxmox_client(config))
+    except Exception as exc:
+        return f"Template check failed: {exc}"
+    return None
+
+
 @app.route("/api/admin/provision", methods=["POST"])
 @limiter.limit(ADMIN_LIMIT)
 @admin_required
@@ -749,6 +757,10 @@ def admin_provision():
         provision.require_template_fields(config)
     except (ValueError, TypeError) as exc:
         return jsonify(detail=f"Invalid configuration: {exc}"), 400
+
+    error = template_check_error(config)
+    if error:
+        return jsonify(detail=error), 400
 
     count = config["vm_count"]
 
@@ -824,6 +836,10 @@ def admin_update_pool(code):
     except (ValueError, TypeError) as exc:
         return jsonify(detail=f"Invalid configuration: {exc}"), 400
 
+    error = template_check_error(config)
+    if error:
+        return jsonify(detail=error), 400
+
     new_name = config_pool_name(config)
     if new_name != config_pool_name(saved) and any(ref != code and config_pool_name(other) == new_name for ref, other in load_configs().items()):
         return jsonify(detail=f"A pool named {new_name!r} already exists."), 400
@@ -894,6 +910,10 @@ def admin_redeploy():
         provision.require_template_fields(config)
     except (ValueError, TypeError) as exc:
         return jsonify(detail=f"Invalid configuration: {exc}"), 400
+
+    error = template_check_error(config)
+    if error:
+        return jsonify(detail=error), 400
 
     poolstore.update(CONFIGS_FILE, save, dict)
     if not state.get("done"):

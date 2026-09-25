@@ -20,41 +20,51 @@ def list_workshop_vms(proxmox, node):
     return [vm for vm in all_vms if vm.get('name', '').startswith(WORKSHOP_PREFIX) and not vm.get('template')]
 
 
+TRANSIENT_DESTROY_ERRORS = ("got timeout", "lock", "busy", "did not stop", "warnings")
+
+
 def destroy_worker(proxmox, node_name, vmid, vm_name, log):
     node = proxmox.nodes(node_name)
 
-    try:
-        ensure_not_template(node, vmid)
-        current_status = node.qemu(vmid).status.current.get()
+    for attempt in range(3):
+        try:
+            ensure_not_template(node, vmid)
+            current_status = node.qemu(vmid).status.current.get()
 
-        identity = current_status.get("name")
-        if identity != vm_name:
-            raise RuntimeError(f"VM {vmid} is now {identity!r}, aborting destroy")
+            identity = current_status.get("name")
+            if identity != vm_name:
+                raise RuntimeError(f"VM {vmid} is now {identity!r}, aborting destroy")
 
-        # Proxmox won't delete a running VM
-        if current_status.get("status") == "running":
-            log(f"[{vmid}] 🛑 Stopping {vm_name}...")
-            node.qemu(vmid).status.stop.post()
+            # Proxmox won't delete a running VM
+            if current_status.get("status") == "running":
+                log(f"[{vmid}] 🛑 Stopping {vm_name}...")
+                node.qemu(vmid).status.stop.post()
 
-            deadline = time.time() + 120
-            while time.time() < deadline:
-                time.sleep(2)
-                status = node.qemu(vmid).status.current.get().get("status")
-                if status == "stopped":
-                    break
-            else:
-                raise TimeoutError(f"VM {vmid} did not stop within 120 seconds")
+                deadline = time.time() + 120
+                while time.time() < deadline:
+                    time.sleep(2)
+                    status = node.qemu(vmid).status.current.get().get("status")
+                    if status == "stopped":
+                        break
+                else:
+                    raise TimeoutError(f"VM {vmid} did not stop within 120 seconds")
 
-        identity = node.qemu(vmid).status.current.get().get("name")
-        if identity != vm_name:
-            raise RuntimeError(f"VM {vmid} is now {identity!r}, aborting destroy")
+            identity = node.qemu(vmid).status.current.get().get("name")
+            if identity != vm_name:
+                raise RuntimeError(f"VM {vmid} is now {identity!r}, aborting destroy")
 
-        log(f"[{vmid}] 💥 Destroying {vm_name}...")
-        wait_for_task(node, node.qemu(vmid).delete(), 120)
-        return f"✅ Successfully destroyed {vm_name} ({vmid})"
+            log(f"[{vmid}] 💥 Destroying {vm_name}...")
+            wait_for_task(node, node.qemu(vmid).delete(), 120)
+            return f"✅ Successfully destroyed {vm_name} ({vmid})"
 
-    except Exception as e:
-        raise RuntimeError(f"❌ Failed to destroy {vm_name} ({vmid}): {e}") from e
+        except Exception as e:
+            text = str(e).lower()
+            if "does not exist" in text or "no such" in text:
+                return f"VM {vm_name} ({vmid}) already gone"
+            if attempt < 2 and any(marker in text for marker in TRANSIENT_DESTROY_ERRORS):
+                time.sleep(15)
+                continue
+            raise RuntimeError(f"❌ Failed to destroy {vm_name} ({vmid}): {e}") from e
 
 
 def load_pool(pool_output_file):

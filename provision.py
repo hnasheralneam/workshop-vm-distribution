@@ -64,6 +64,8 @@ VERIFY_SSL = os.getenv("VERIFY_SSL", "false").lower() in ("true", "1", "yes")
 
 RECONNECT_IP_TIMEOUT = 30
 
+IP_TIMEOUTS = {"ssh": 120, "vnc": 180, "rdp": 420}
+
 
 def default_config():
     return {
@@ -259,7 +261,18 @@ def ensure_not_template(node, vmid):
         raise RuntimeError(f"VM {vmid} is a template and will never be destroyed")
 
 
+def ensure_template(proxmox, config):
+    vmid = config["template_vm_id"]
+    try:
+        status = proxmox.nodes(config["proxmox_node"]).qemu(vmid).status.current.get()
+    except Exception as exc:
+        raise RuntimeError(f"Template VM {vmid} not found on node {config['proxmox_node']}: {exc}") from exc
+    if not status.get("template"):
+        raise RuntimeError(f"VM {vmid} is not a template, convert it with 'qm template {vmid}'")
+
+
 vmid_lock = threading.Lock()
+clone_lock = threading.Lock()
 last_allocated_vmid = 0
 
 
@@ -294,14 +307,17 @@ def provision_worker(proxmox, config, student_id, log):
     upid = None
 
     try:
-        vmid, upid = clone_template(proxmox, config, student_id, log)
-        wait_for_task(node, upid)
+        ensure_template(proxmox, config)
+
+        with clone_lock:
+            vmid, upid = clone_template(proxmox, config, student_id, log)
+            wait_for_task(node, upid)
 
         log(f"[{vmid}] Booting VM...")
         node.qemu(vmid).status.start.post()
 
         log(f"[{vmid}] Waiting for IP...")
-        vm_ip = get_vm_ip(proxmox, config, vmid)
+        vm_ip = get_vm_ip(proxmox, config, vmid, timeout=IP_TIMEOUTS.get(access_method, 120))
 
         log(f"[{vmid}] Waiting for {access_method}...")
         wait_for_port(vm_ip, int(get_port(access_method)))
@@ -319,7 +335,7 @@ def provision_worker(proxmox, config, student_id, log):
                 except Exception:
                     break
                 time.sleep(5)
-        log(f"[{vmid}] Provision failed: {exc}. Cleaning up VM...")
+        log(f"[{vmid}] Provision failed: {exc}")
         if upid:
             try:
                 wait_for_task(node, upid)
@@ -327,6 +343,7 @@ def provision_worker(proxmox, config, student_id, log):
                 pass
         if vmid is None:
             raise
+        log(f"[{vmid}] Cleaning up VM...")
         try:
             from destroy import destroy_worker
             destroy_worker(proxmox, config["proxmox_node"], vmid, f"workshop-{student_id}", log)
