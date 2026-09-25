@@ -741,7 +741,7 @@ def admin_pool():
 
 def template_check_error(config):
     try:
-        provision.ensure_template(provision.get_proxmox_client(config))
+        provision.ensure_template(provision.get_proxmox_client(config), config)
     except Exception as exc:
         return f"Template check failed: {exc}"
     return None
