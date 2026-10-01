@@ -421,6 +421,18 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
 
     log("\n--- Firing off Proxmox Clones in Parallel ---")
     results = []
+    entries = []
+    pending = []
+    pool_output_file = config["url_output_file"]
+    access_method = config["template_vm_access_method"]
+
+    def make_entry(vmid, student_id, url, expires_at):
+        return {"vmid": vmid, "student_id": student_id, "uid": uuid.uuid4().hex,
+                "url": url, "claimed": False, "expires_at": expires_at,
+                "access_method": access_method, "pool_code": config.get("pool_code") or "",
+                "template_vm_username": config["template_vm_username"],
+                "template_vm_password": config["template_vm_password"],
+                "created_at": time.time()}
 
     # keep max_workers low or parallel clones hammer the Proxmox API
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -433,9 +445,20 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
             try:
                 vmid, student_id, url, expires_at = future.result()
                 results.append((vmid, student_id, url, expires_at))
-                log(f"✅ {student_id} is ready! (token URL stored)")
+                entry = make_entry(vmid, student_id, url, expires_at)
+                entries.append(entry)
+                try:
+                    full_pool = append_pool_entries(pool_output_file, [entry])
+                    log(f"✅ {student_id} is ready! Added to pool (now {len(full_pool)} total)")
+                except Exception as exc:
+                    pending.append(entry)
+                    log(f"✅ {student_id} is ready! Pool write deferred, will retry at end ({exc})")
             except Exception as exc:
                 log(f"❌ VM creation failed: {exc}")
+
+    if pending:
+        full_pool = append_pool_entries(pool_output_file, pending)
+        log(f"Flushed {len(pending)} deferred pool write(s) (now {len(full_pool)} total)")
 
     if results:
         log("\n=== ALL WORKSHOP VMS PROVISIONED ===")
@@ -445,20 +468,8 @@ def run_parallel_provisioning(config, count=None, log=applog.log.info):
     else:
         log("\n=== NO WORKSHOP VMS WERE PROVISIONED ===")
 
-    pool_output_file = config["url_output_file"]
-    access_method = config["template_vm_access_method"]
-    new_entries = [
-        {"vmid": v, "student_id": s, "url": u, "claimed": False, "expires_at": e,
-         "access_method": access_method, "pool_code": config.get("pool_code") or "",
-         "template_vm_username": config["template_vm_username"],
-         "template_vm_password": config["template_vm_password"],
-         "created_at": time.time()}
-        for v, s, u, e in results
-    ]
-    full_pool = append_pool_entries(pool_output_file, new_entries)
-    log(f"\nAdded {len(new_entries)} VMs to pool (now {len(full_pool)} total)")
-
-    return new_entries
+    log(f"\nAdded {len(entries)} of {count} VM(s) to pool")
+    return entries
 
 
 if __name__ == "__main__":
