@@ -38,7 +38,7 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
             # Proxmox won't delete a running VM
             if current_status.get("status") == "running":
                 log(f"[{vmid}] 🛑 Stopping {vm_name}...")
-                node.qemu(vmid).status.stop.post()
+                node.qemu(vmid).status.stop.post(forceStop=1)
 
                 deadline = time.time() + 120
                 while time.time() < deadline:
@@ -117,7 +117,7 @@ def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
     log(f"Found {len(target_vms)} workshop VMs to destroy.")
 
     results = []
-    destroyed_vmids = set()
+    deferred_vmids = set()
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
             executor.submit(destroy_worker, proxmox, config["proxmox_node"], vm['vmid'], vm['name'], log): vm
@@ -128,7 +128,15 @@ def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
             vm = futures[future]
             try:
                 results.append(future.result())
-                destroyed_vmids.add(vm['vmid'])
+                if pool_output_file:
+                    try:
+                        remaining_pool = poolstore.update(
+                            pool_output_file,
+                            lambda entries: [entry for entry in entries if entry.get('vmid') != vm['vmid']])
+                        log(f"Removed {vm['name']} ({vm['vmid']}) from pool ({len(remaining_pool)} entries remaining)")
+                    except Exception as exc:
+                        deferred_vmids.add(vm['vmid'])
+                        log(f"Pool write deferred, will retry at end ({exc})")
             except Exception as exc:
                 results.append(str(exc))
 
@@ -139,7 +147,7 @@ def run_teardown(config, mode="all", vmids=None, log=applog.log.info):
     if pool_output_file:
         remaining_pool = poolstore.update(
             pool_output_file,
-            lambda entries: [{k: v for k, v in entry.items() if k != 'destroying'} for entry in entries if entry.get('vmid') not in destroyed_vmids])
+            lambda entries: [{k: v for k, v in entry.items() if k != 'destroying'} for entry in entries if entry.get('vmid') not in deferred_vmids])
         log(f"\nUpdated pool file: {pool_output_file} ({len(remaining_pool)} entries remaining)")
 
     return results
