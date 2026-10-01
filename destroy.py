@@ -38,7 +38,7 @@ def destroy_worker(proxmox, node_name, vmid, vm_name, log):
             # Proxmox won't delete a running VM
             if current_status.get("status") == "running":
                 log(f"[{vmid}] 🛑 Stopping {vm_name}...")
-                node.qemu(vmid).status.stop.post(forceStop=1)
+                node.qemu(vmid).status.stop.post()
 
                 deadline = time.time() + 120
                 while time.time() < deadline:
