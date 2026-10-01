@@ -3,6 +3,7 @@ const provisionBtn = document.getElementById("provision-btn");
 const destroyAllBtn = document.getElementById("destroy-all-btn");
 const destroySelectedBtn = document.getElementById("destroy-selected-btn");
 const extendSelectedBtn = document.getElementById("extend-selected-btn");
+const extendHoursInput = document.getElementById("extend-hours");
 const poolRows = document.getElementById("pool-rows");
 const redeployRows = document.getElementById("redeploy-rows");
 const jobStatus = document.getElementById("job-status");
@@ -509,12 +510,13 @@ function openDeployModal(pool) {
 
 extendSelectedBtn.addEventListener("click", async () => {
    const vmids = [...document.querySelectorAll(".vm-checkbox:checked")].map((el) => parseInt(el.value, 10));
-   if (!confirm(`Extend ${vmids.length} selected VM(s) by 1 hour?`)) return;
+   const hours = parseFloat(extendHoursInput.value) || 1;
+   if (!confirm(`Extend ${vmids.length} selected VM(s) by ${hours} hour(s)?`)) return;
    for (const vmid of vmids) {
       const res = await fetch("/api/admin/extend", {
          method: "POST",
          headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ vmid, hours: 1 }),
+         body: JSON.stringify({ vmid, hours }),
       });
       if (!res.ok) {
          const data = await res.json();

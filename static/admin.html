@@ -54,7 +54,10 @@
       <div class="card-header">
          <h2>Virtual Machines</h2>
          <div class="row">
-            <button class="secondary" id="extend-selected-btn" disabled>Extend Selected</button>
+            <div class="deploy-group">
+               <button class="secondary" id="extend-selected-btn" disabled>Extend Selected</button>
+               <input id="extend-hours" type="number" min="0.5" step="any" value="1">
+            </div>
             <button class="danger" id="destroy-selected-btn" disabled>Destroy Selected</button>
             <button class="danger" id="destroy-all-btn">Destroy All</button>
          </div>

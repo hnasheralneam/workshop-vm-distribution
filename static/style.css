@@ -550,7 +550,8 @@ body.admin .deploy-group input[type="number"] {
 	text-align: center;
 }
 
-body.admin .deploy-group .deploy-btn {
+body.admin .deploy-group .deploy-btn,
+body.admin .deploy-group #extend-selected-btn {
 	height: 2rem;
 	padding: 0 0.9rem;
 	margin: 0;
