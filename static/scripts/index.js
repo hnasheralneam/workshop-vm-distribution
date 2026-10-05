@@ -175,7 +175,7 @@ async function loadPoolButtons(attempt = 0) {
 		codeBtn.hidden = !(data.coded > 0);
 		const pools = (data.pools || []).filter((p) => !p.private && p.code && (p.dispenser || p.available > 0));
 		if (pools.length > 1) {
-			renderButtons(pools.map((p) => ({ text: `Claim ${p.name}`, name: p.name, code: p.code })));
+			renderButtons(pools.map((p) => ({ text: `Claim ${poolLabel(p.name)}`, name: p.name, code: p.code })));
 		} else if (pools.length === 1) {
 			renderButtons([{ text: "Claim", name: pools[0].name, code: pools[0].code }]);
 		} else {
@@ -341,14 +341,20 @@ async function init() {
 	resumeTickets();
 
 	if (onClaimPage && claimCode) {
-		renderButtons([{ text: claimLabel ? `Claim ${claimLabel}` : "Claim", name: claimLabel, code: claimCode }]);
-		if (vms.length) {
-			try {
-				const response = await fetch("/api/types");
-				applyTypes(await response.json());
-			} catch (error) {}
+		let claiming = false;
+		const renderClaimBtn = () => {
+			if (claiming) return;
+			renderButtons([{ text: claimLabel ? `Claim ${poolLabel(claimLabel)}` : "Claim", name: claimLabel, code: claimCode }]);
+		};
+		renderClaimBtn();
+		fetch("/api/types").then((r) => r.json()).then((data) => {
+			applyTypes(data);
+			renderClaimBtn();
+		}).catch(() => {});
+		if (!loadTickets().length) {
+			claiming = true;
+			claimByCode(claimCode);
 		}
-		if (!loadTickets().length) claimByCode(claimCode);
 		return;
 	}
 
