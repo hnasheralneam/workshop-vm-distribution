@@ -87,6 +87,8 @@ function formatTimeAmount(timeMs, units = "yMwdhms", decimalPrecision) {
    return result;
 }
 
+const vmPoolText = (entry) => (entry.pool ? `${entry.pool}${entry.os ? ` (${entry.os})` : ""}` : "");
+
 async function loadPool() {
    const res = await fetch("/api/admin/pool");
    if (!res.ok) return;
@@ -125,7 +127,7 @@ async function loadPool() {
          checkbox.checked = checked.has(checkbox.value);
          checkCell.appendChild(checkbox);
          tr.appendChild(checkCell);
-         for (const value of [entry.vmid, entry.pool ?? "", entry.student_id ?? ""]) {
+         for (const value of [entry.vmid, vmPoolText(entry), entry.student_id ?? ""]) {
             const td = document.createElement("td");
             td.textContent = value;
             tr.appendChild(td);

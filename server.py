@@ -84,8 +84,12 @@ def entry_ttl(entry):
     return (config or {}).get("guac_link_ttl_seconds", 7200)
 
 
+def config_os(config):
+    return "Windows" if config.get("template_vm_access_method") == "rdp" else "Linux"
+
+
 def config_pool_name(config):
-    return config.get("pool_name") or ("Windows" if config.get("template_vm_access_method") == "rdp" else "Linux")
+    return config.get("pool_name") or config_os(config)
 
 
 def ref_label(configs, ref):
@@ -281,7 +285,7 @@ def types():
     configs = load_configs()
     pools = {}
     for code, config in configs.items():
-        pools[code] = {"name": config_pool_name(config), "code": None if config.get("private") else code, "available": 0, "dispenser": bool(config.get("dispenser")), "private": bool(config.get("private"))}
+        pools[code] = {"name": config_pool_name(config), "code": None if config.get("private") else code, "available": 0, "dispenser": bool(config.get("dispenser")), "private": bool(config.get("private")), "os": config_os(config)}
     for entry in poolstore.load(POOL_FILE):
         if not is_available(entry) or entry_ref(entry) not in configs:
             continue
@@ -779,10 +783,12 @@ def admin_pool():
     entries = []
     configs = load_configs()
     for entry in poolstore.load(POOL_FILE):
+        config = configs.get(entry_ref(entry))
         entries.append({
             "vmid": entry.get("vmid"),
             "student_id": entry.get("student_id"),
             "pool": ref_label(configs, entry_ref(entry)),
+            "os": config_os(config) if config else None,
             "claimed": entry.get("claimed") or entry.get("reserved"),
             "expired": is_expired(entry),
             "expires_at": entry.get("expires_at"),

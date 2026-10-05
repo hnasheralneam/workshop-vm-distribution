@@ -24,6 +24,7 @@ const provisionLines = document.getElementById("provision-lines");
 const provisionError = document.getElementById("provision-error");
 const provisionCloseBtn = document.getElementById("provision-close-btn");
 const polls = new Map();
+const poolTypes = new Map();
 const modalTickets = new Map();
 let pendingClaim = null;
 let provisionErrorMode = false;
@@ -156,6 +157,14 @@ function setButtonsDisabled(disabled) {
 function applyTypes(data) {
 	MAX_VMS = data.max_vms || 2;
 	subtitle.innerText = `Claim up to ${MAX_VMS} personal workshop VMs below.`;
+	poolTypes.clear();
+	for (const p of data.pools || []) if (p.os) poolTypes.set(p.name, p.os);
+	renderVms();
+}
+
+function poolLabel(name, fallback) {
+	if (!name) return fallback || "Workshop VM";
+	return poolTypes.has(name) ? `${name} (${poolTypes.get(name)})` : name;
 }
 
 async function loadPoolButtons(attempt = 0) {
@@ -200,7 +209,7 @@ function renderVms() {
 		row.className = "vm-row";
 		const label = document.createElement("span");
 		label.className = "vm-label";
-		label.innerText = vm.pool || "Workshop VM";
+		label.innerText = poolLabel(vm.pool);
 		if (vm.expires_at) {
 			const expiry = document.createElement("span");
 			expiry.className = "vm-expiry";
@@ -294,7 +303,7 @@ async function reconnectVm(vm, row) {
 }
 
 async function releaseVm(vm, row) {
-	if (!confirm(`Release ${vm.pool || "this machine"}? It will be immediately and permanently deleted.`)) {
+	if (!confirm(`Release ${poolLabel(vm.pool, "this machine")}? It will be immediately and permanently deleted.`)) {
 		setRowDisabled(row, false);
 		return;
 	}
@@ -739,7 +748,7 @@ function openSwapModal(claimFn) {
 		row.className = "swap-row";
 		const label = document.createElement("span");
 		label.className = "vm-label";
-		label.innerText = vm.pool || "Workshop VM";
+		label.innerText = poolLabel(vm.pool);
 		if (vm.expires_at) {
 			const expiry = document.createElement("span");
 			expiry.className = "vm-expiry";
