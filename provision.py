@@ -287,7 +287,7 @@ def ensure_template(proxmox, config):
 
 vmid_lock = threading.Lock()
 clone_lock = threading.Lock()
-last_allocated_vmid = 0
+last_allocated_vmid = int(os.getenv("VMID_START", "100")) - 1
 
 
 def allocate_vmid(proxmox, node):

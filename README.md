@@ -23,6 +23,7 @@ Edit `.env` with your Proxmox and Guacamole details:
 - `PROXMOX_URL`, `PROXMOX_USER`, `PROXMOX_TOKEN_NAME`, `PROXMOX_TOKEN_SECRET`, `PROXMOX_NODE`, `VERIFY_SSL`
 - `GUACAMOLE_URL`, `GUACAMOLE_INTERNAL_URL`, `GUACAMOLE_KEY`
 - `ADMIN_PASSWORD`, `LOG_FILE`, `PORT`
+- `VMID_START` (optional, default 100): the first VMID a provisioned VM gets; later VMs count up from there
 
 Template VM id/username/password, access method, VM count, and link duration aren't in `.env`; they're entered per pool, either in the admin "New pool" form or interactively when running `provision.py` directly.
 
