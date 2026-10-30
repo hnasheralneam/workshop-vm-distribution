@@ -11,13 +11,14 @@ from functools import wraps
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.errors import RateLimitExceeded
 from flask_limiter.util import get_remote_address
 
 import applog
 import destroy
+import guest
 import poolstore
 import provision
 
@@ -29,6 +30,16 @@ CONFIGS_FILE = BASE_DIR / "configs.json"
 REAP_INTERVAL_SECONDS = 60
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 MAX_VMS = int(os.getenv("MAX_VMS", "2"))
+# Prebind handoff (huitzilopochtli ranked joins): the engine sends a one-time
+# join code; the portal runs `huitz join` inside the VM when the player opens
+# the link. Disabled unless both sides share HUITZ_PREBIND_SECRET.
+PREBIND_SECRET = os.getenv("HUITZ_PREBIND_SECRET", "")
+HUITZ_BIN = os.getenv("HUITZ_BIN", "/usr/local/bin/huitz")
+# Windows boxes have no `huitz` shim; the zipapp runs through Python.
+HUITZ_WIN_PYTHON = os.getenv("HUITZ_WIN_PYTHON", "python")
+HUITZ_WIN_AGENT = os.getenv("HUITZ_WIN_AGENT", r"C:\ProgramData\huitzilopochtli\agent.pyz")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
+JOIN_CODE_RE = re.compile(r"^[A-Z0-9]{4,64}$")
 
 app = Flask(__name__, static_folder=None)
 limiter = Limiter(app=app, key_func=get_remote_address, default_limits=[])
@@ -114,6 +125,120 @@ def normalize_code(code):
 def json_body():
     body = request.get_json(silent=True)
     return body if isinstance(body, dict) else {}
+
+
+def prebind_authorized():
+    supplied = request.headers.get("X-Huitz-Secret", "")
+    return bool(PREBIND_SECRET) and hmac.compare_digest(
+        supplied.encode(), PREBIND_SECRET.encode())
+
+
+def engine_request():
+    """Rate-limit exemption for the scoring engine (shared-secret callers).
+
+    A class joining at once makes the engine claim and poll from a single IP;
+    the per-IP limits are for browsers, not for one trusted backend."""
+    return prebind_authorized()
+
+
+def parse_prebind(body):
+    """Validated prebind state for a claim, or None when not requested."""
+    raw = body.get("prebind")
+    if not isinstance(raw, dict) or not raw.get("code"):
+        return None
+    code = str(raw["code"]).strip().upper()
+    if not JOIN_CODE_RE.match(code):
+        return None
+    return {"code": code,
+            "back_url": str(raw.get("back_url") or "")[:500],
+            "done": False, "error": None, "attempt_at": 0.0}
+
+
+def open_base():
+    return PUBLIC_URL or request.host_url.rstrip("/")
+
+
+def open_url_for(uid):
+    return f"{open_base()}/r/{uid}" if uid else None
+
+
+def attach_prebind(uid, prebind):
+    """Attach (or refresh) the prebind state on the pool entry for uid."""
+    if not uid or not prebind:
+        return
+
+    def apply(entries):
+        for entry in entries:
+            if entry.get("uid") == uid:
+                current = entry.get("prebind")
+                if isinstance(current, dict):
+                    current.update(prebind)
+                else:
+                    entry["prebind"] = dict(prebind)
+        return entries
+
+    poolstore.update(POOL_FILE, apply)
+
+
+def update_prebind(uid, **fields):
+    def apply(entries):
+        for entry in entries:
+            if entry.get("uid") == uid and isinstance(entry.get("prebind"), dict):
+                entry["prebind"].update(fields)
+        return entries
+
+    poolstore.update(POOL_FILE, apply)
+
+
+_prebind_locks = {}
+_prebind_locks_guard = threading.Lock()
+
+
+def _prebind_lock(uid):
+    """One join attempt per machine at a time (single worker, many threads).
+
+    Two rapid opens of the same link would otherwise both run `huitz join`;
+    the loser gets 'already joined' and shows a false error."""
+    with _prebind_locks_guard:
+        return _prebind_locks.setdefault(uid, threading.Lock())
+
+
+def prebind_argv(entry, code):
+    """The join command for this machine's OS.
+
+    Linux pools (ssh/vnc) use the installed `huitz` shim; Windows pools (rdp)
+    have no shim, so the agent zipapp runs through Python."""
+    if (entry.get("access_method") or "").lower() == "rdp":
+        return [HUITZ_WIN_PYTHON, HUITZ_WIN_AGENT, "join", "--code", code]
+    return [HUITZ_BIN, "join", "--code", code]
+
+
+def run_prebind_join(entry, prebind):
+    """Run `huitz join` in the guest once. Returns (ok, detail or None)."""
+    now = time.time()
+    if now - float(prebind.get("attempt_at") or 0) < 15 and prebind.get("error"):
+        return False, prebind["error"]  # don't hammer a VM that just failed
+    update_prebind(entry["uid"], attempt_at=now)
+    try:
+        config = destroy.build_config()
+        proxmox = destroy.get_proxmox_client(config)
+        status = guest.run(proxmox, config["proxmox_node"], entry["vmid"],
+                           prebind_argv(entry, prebind["code"]),
+                           timeout_s=90)
+    except Exception as exc:
+        detail = f"could not reach the VM's guest agent: {exc}"
+        update_prebind(entry["uid"], error=detail)
+        applog.log.info(f"Prebind {entry['uid']}: {detail}")
+        return False, detail
+    out = ((status.get("out-data") or "") + (status.get("err-data") or "")).strip()
+    if int(status.get("exitcode") or 0) == 0:
+        update_prebind(entry["uid"], done=True, error=None)
+        applog.log.info(f"Prebind {entry['uid']}: joined")
+        return True, None
+    detail = out[-400:] or f"huitz join exited {status.get('exitcode')}"
+    update_prebind(entry["uid"], error=detail)
+    applog.log.info(f"Prebind {entry['uid']} failed: {detail}")
+    return False, detail
 
 
 def unreserve(entries, vmid):
@@ -217,6 +342,23 @@ def sweep_ghost_vms():
             if entry["vmid"] not in live_vmids:
                 ghost_vmids.add(entry["vmid"])
 
+    # 2026-10-30 fix: pool configs can be deleted while dead VMs they once
+    # spawned stay tracked in pool.json; those entries are invisible to the
+    # per-target sweep above and stick in the UI forever as "expired" ghosts.
+    orphaned = [e for e in entries if entry_ref(e) not in configs
+                and time.time() - e.get("created_at", 0) >= GHOST_SWEEP_GRACE_SECONDS]
+    if orphaned:
+        try:
+            default_cfg = destroy.build_config()
+            proxmox = destroy.get_proxmox_client(default_cfg)
+            all_vmids = {int(v["vmid"]) for v in proxmox.nodes(default_cfg["proxmox_node"]).qemu.get()}
+            for entry in orphaned:
+                if entry.get("vmid") not in all_vmids:
+                    ghost_vmids.add(entry["vmid"])
+        except Exception as exc:
+            applog.log.info(f"Sweep: could not check orphaned-pool entries: {exc}; skipping")
+
+
     if not ghost_vmids:
         return
     for vmid in ghost_vmids:
@@ -296,14 +438,19 @@ def types():
 
 
 @app.route("/api/claim", methods=["POST"])
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", exempt_when=engine_request)
 def claim():
     body = json_body()
+    prebind = parse_prebind(body)
+    if body.get("prebind") and prebind is None:
+        return jsonify(detail="Invalid prebind payload."), 400
+    if prebind and not prebind_authorized():
+        return jsonify(detail="Prebind is disabled: HUITZ_PREBIND_SECRET is not set on the portal."), 403
     if body.get("code"):
         config = find_pool_by_code(body.get("code"))
         if config is None:
             return jsonify(detail="Unknown code."), 404
-        return claim_from_pool(config)
+        return claim_from_pool(config, prebind)
 
     configs = load_configs()
     public_refs = {code for code, cfg in configs.items() if not cfg.get("private")}
@@ -330,14 +477,17 @@ def claim():
     url, final_entry, transient = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
     if url is None:
         if transient:
-            ticket = start_ticket(stage="connecting")
+            ticket = start_ticket(stage="connecting", prebind=prebind)
             threading.Thread(target=run_mint_retry, args=(ticket, final_entry, predicate, "Claim"), daemon=True).start()
             return jsonify(status="provisioning", stage="connecting", ticket=ticket), 202
         return jsonify(detail="VM is not reachable right now. Please contact your instructor."), 502
 
     if not finalize_claim(final_entry, url, state):
         return jsonify(detail="That machine was just reclaimed. Please try again."), 503
-    return jsonify(url=url, expires_at=state.get("expires_at"), uid=state.get("uid"))
+    if prebind and state.get("uid"):
+        attach_prebind(state["uid"], prebind)
+    return jsonify(url=url, open_url=open_url_for(state.get("uid")),
+                   expires_at=state.get("expires_at"), uid=state.get("uid"))
 
 
 def provision_running_for(code):
@@ -346,11 +496,14 @@ def provision_running_for(code):
         return bool(job and job["status"] == "running" and job.get("pool_code") == code)
 
 
-def start_ticket(stage="cloning"):
+def start_ticket(stage="cloning", prebind=None):
     ticket = str(uuid.uuid4())
+    info = {"status": "provisioning", "stage": stage}
+    if prebind:
+        info["prebind"] = prebind
     with ticket_lock:
         prune_tickets_locked(time.time())
-        redeem_tickets[ticket] = {"status": "provisioning", "stage": stage}
+        redeem_tickets[ticket] = info
     return ticket
 
 
@@ -439,7 +592,7 @@ def run_mint_retry(ticket, entry, pool_predicate, log_prefix):
         set_ticket(ticket, status="error", detail=detail)
 
 
-def claim_from_pool(config):
+def claim_from_pool(config, prebind=None):
     code = normalize_code(config.get("pool_code"))
     pool_name = config_pool_name(config)
     state = {}
@@ -462,22 +615,26 @@ def claim_from_pool(config):
         url, final_entry, transient = mint_or_prune(entry, entry_ttl(entry), predicate, "Claim")
         if url is None:
             if transient:
-                ticket = start_ticket(stage="connecting")
+                ticket = start_ticket(stage="connecting", prebind=prebind)
                 threading.Thread(target=run_mint_retry, args=(ticket, final_entry, predicate, "Claim"), daemon=True).start()
                 return jsonify(status="provisioning", stage="connecting", ticket=ticket, pool=pool_name), 202
             return jsonify(detail="VM is not reachable right now. Please try again."), 502
         if not finalize_claim(final_entry, url, state):
             return jsonify(detail="That machine was just reclaimed. Please try again."), 503
-        return jsonify(status="ready", url=url, pool=pool_name, expires_at=state.get("expires_at"), uid=state.get("uid"))
+        if prebind and state.get("uid"):
+            attach_prebind(state["uid"], prebind)
+        return jsonify(status="ready", url=url, open_url=open_url_for(state.get("uid")),
+                       pool=pool_name, expires_at=state.get("expires_at"),
+                       uid=state.get("uid"))
 
     if provision_running_for(code):
-        ticket = start_ticket()
+        ticket = start_ticket(prebind=prebind)
         threading.Thread(target=run_claim_wait, args=(ticket, config), daemon=True).start()
         return jsonify(status="provisioning", ticket=ticket, pool=pool_name), 202
 
     if not config.get("dispenser"):
         return jsonify(detail=f"No VMs available in pool {pool_name!r} right now."), 404
-    ticket = start_ticket()
+    ticket = start_ticket(prebind=prebind)
     threading.Thread(target=run_redeem_provision, args=(ticket, config), daemon=True).start()
     return jsonify(status="provisioning", ticket=ticket, pool=pool_name), 202
 
@@ -703,14 +860,163 @@ def redeem():
 
 
 @app.route("/api/redeem/<ticket>", methods=["GET"])
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", exempt_when=engine_request)
 def redeem_status(ticket):
+    pending_attach = None
     with ticket_lock:
         prune_tickets_locked(time.time())
-        snapshot = dict(redeem_tickets[ticket]) if ticket in redeem_tickets else None
+        info = redeem_tickets.get(ticket)
+        snapshot = dict(info) if info is not None else None
+        if info is not None and info.get("status") == "ready":
+            prebind = info.get("prebind")
+            if prebind and not info.get("prebind_attached"):
+                info["prebind_attached"] = True
+                pending_attach = (info.get("uid"), dict(prebind))
     if snapshot is None:
         return jsonify(detail="Unknown ticket."), 404
+    # Never hand the join code back to ticket holders.
+    snapshot.pop("prebind", None)
+    snapshot.pop("prebind_attached", None)
+    if snapshot.get("status") == "ready" and snapshot.get("uid"):
+        if pending_attach:
+            attach_prebind(*pending_attach)
+        snapshot["open_url"] = open_url_for(snapshot["uid"])
     return jsonify(snapshot)
+
+
+@app.route("/api/prebind", methods=["POST"])
+@limiter.limit("30/minute")
+def prebind_update():
+    """Rotate the join code the portal holds for an already-claimed VM."""
+    if not prebind_authorized():
+        return jsonify(detail="Prebind is disabled: HUITZ_PREBIND_SECRET is not set on the portal."), 403
+    body = json_body()
+    uid = str(body.get("uid") or "")
+    code = str(body.get("code") or "").strip().upper()
+    if not uid or not JOIN_CODE_RE.match(code):
+        return jsonify(detail="uid and a valid one-time code are required."), 400
+    entry = next((e for e in poolstore.load(POOL_FILE) if e.get("uid") == uid), None)
+    if entry is None:
+        return jsonify(detail="No machine with that uid."), 404
+    if (entry.get("prebind") or {}).get("done"):
+        return jsonify(ok=True, ignored="already joined")
+    attach_prebind(uid, {"code": code,
+                         "back_url": str(body.get("back_url") or "")[:500],
+                         "done": False, "error": None, "attempt_at": 0.0})
+    applog.log.info(f"Prebind {uid}: code rotated")
+    return jsonify(ok=True)
+
+
+@app.route("/api/open/<uid>", methods=["POST"])
+@limiter.limit("30/minute")
+def open_vm(uid):
+    """Mint a fresh session for a claimed VM and join it if not yet joined."""
+    entry = next((e for e in poolstore.load(POOL_FILE)
+                  if e.get("uid") == uid and not e.get("released")), None)
+    if entry is None:
+        return jsonify(valid=False, detail="This VM is no longer available."), 404
+    prebind = entry.get("prebind") if isinstance(entry.get("prebind"), dict) else {}
+    if not entry.get("claimed") or is_expired(entry):
+        return jsonify(valid=False, expired=True,
+                       detail="This VM has expired. Go back to the competition page and get a new one.",
+                       back_url=prebind.get("back_url", "")), 410
+    try:
+        ttl = entry_ttl(entry)
+        url = provision.mint_session_url(entry, ttl)
+    except Exception as exc:
+        applog.log.info(f"Open {uid}: mint failed: {exc}")
+        return jsonify(valid=False, detail="Could not reach the VM. Try again in a moment.",
+                       back_url=prebind.get("back_url", "")), 502
+
+    def refresh(entries):
+        for candidate in entries:
+            if candidate.get("uid") == uid:
+                # Re-mint the session, not the machine's lifetime: reopening a
+                # link must not keep a box alive past its claim TTL.
+                candidate["url"] = url
+        return entries
+
+    poolstore.update(POOL_FILE, refresh)
+    joined, detail = True, None
+    if prebind and not prebind.get("done") and prebind.get("code"):
+        with _prebind_lock(uid):
+            current = next((e for e in poolstore.load(POOL_FILE)
+                            if e.get("uid") == uid), entry)
+            current_prebind = (current.get("prebind")
+                               if isinstance(current.get("prebind"), dict) else {})
+            if current_prebind.get("done"):
+                joined, detail = True, None
+            else:
+                joined, detail = run_prebind_join(current, current_prebind)
+            prebind = current_prebind or prebind
+    return jsonify(valid=True, url=url, joined=joined, detail=detail,
+                   back_url=prebind.get("back_url", ""))
+
+
+OPEN_PAGE = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Starting your VM</title>
+<style>
+:root{--bg:#181410;--panel:#211b16;--line:#4a3c2e;--fg:#f2e8d8;--muted:#b9a98f;--accent:#c99a62}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);
+font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:2rem}
+main{max-width:34rem;background:var(--panel);border:1px solid var(--line);padding:2rem}
+h1{margin:0 0 .75rem;font-size:1.35rem}
+p{color:var(--muted);margin:0 0 1rem}
+.sub{color:var(--muted);font-size:.85rem;word-break:break-word}
+.spin{width:1.1rem;height:1.1rem;border:.15rem solid var(--line);border-top-color:var(--accent);
+border-radius:50%;display:inline-block;vertical-align:-.2rem;margin-right:.5rem;animation:s 1s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+a.btn{display:inline-block;margin:.4rem .5rem 0 0;padding:.5rem .9rem;border:1px solid var(--accent);
+color:var(--accent);text-decoration:none}
+a.btn:hover{background:var(--accent);color:#1f1a14}
+</style></head><body><main>
+<h1>Starting your VM</h1>
+<p id="msg"><span class="spin"></span>Preparing your session…</p>
+<p id="sub" class="sub" style="display:none"></p>
+<div id="actions"></div>
+</main>
+<script>
+(function(){
+  var uid=(__UID__);
+  var msg=document.getElementById("msg"), actions=document.getElementById("actions"),
+      sub=document.getElementById("sub");
+  function show(text, links, detail){
+    msg.textContent=text; actions.textContent="";
+    if(detail){ sub.textContent=detail; sub.style.display="block"; }
+    else{ sub.textContent=""; sub.style.display="none"; }
+    (links||[]).forEach(function(l){
+      if(!l.href) return;
+      var a=document.createElement("a"); a.className="btn";
+      a.href=l.href; a.textContent=l.text; actions.appendChild(a);
+    });
+  }
+  fetch("/api/open/"+encodeURIComponent(uid),{method:"POST",headers:{"Accept":"application/json"}})
+    .then(function(r){return r.json().then(function(d){return d;}).catch(function(){return {};});})
+    .then(function(d){
+      if(d.valid&&d.url&&d.joined){ location.replace(d.url); return; }
+      if(d.valid&&d.url){
+        show("The VM itself is ready — you can open it now. Reopen this link in a moment to retry the automatic join.",
+             [{href:d.url,text:"Open the VM anyway"},{href:d.back_url,text:"Back to the competition"}],
+             d.detail||"");
+        return;
+      }
+      show(d.detail||"This VM is no longer available.",
+           [{href:d.back_url,text:"Back to the competition"}]);
+    })
+    .catch(function(){ show("Could not reach the portal. Reload to try again.",[]); });
+})();
+</script></body></html>"""
+
+
+@app.route("/r/<uid>")
+def open_page(uid):
+    """Stable per-VM link: always mints a fresh session, then redirects."""
+    page = OPEN_PAGE.replace("(__UID__)", json.dumps(uid))
+    return Response(page, mimetype="text/html",
+                    headers={"Cache-Control": "no-store"})
 
 
 def admin_required(f):
